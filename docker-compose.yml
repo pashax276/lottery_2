@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      target: frontend
+    ports:
+      - "80:80"
+    environment:
+      - VITE_API_URL=http://localhost:5001
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: .
+      target: backend
+    ports:
+      - "5002:5002"
+    environment:
+      - PYTHONUNBUFFERED=1
