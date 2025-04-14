@@ -8,10 +8,12 @@ import Predictions from './components/Predictions';
 import Analysis from './components/Analysis';
 import History from './components/History';
 import Settings from './components/Settings';
+import UserSettings from './components/UserSettings';
+import DrawManagement from './components/DrawManagement';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { getCurrentUser, isAuthenticated, logout } from './lib/api';
-import { User } from 'lucide-react';
+import { User, LogOut } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +81,10 @@ function App() {
         return <History />;
       case 'settings':
         return <Settings />;
+      case 'user-settings':
+        return <UserSettings />;
+      case 'draw-management':
+        return <DrawManagement />;
       default:
         return <Dashboard />;
     }
@@ -100,15 +106,23 @@ function App() {
                     
                     {user && (
                       <div className="flex items-center space-x-4">
-                        <div className="flex items-center space-x-2">
-                          <User className="h-5 w-5 text-gray-500" />
-                          <span className="text-sm font-medium text-gray-700">{user.username}</span>
-                        </div>
+                        <button
+                          onClick={() => setActiveTab('user-settings')}
+                          className={`flex items-center space-x-2 px-3 py-2 rounded-md ${
+                            activeTab === 'user-settings'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <User className="h-5 w-5" />
+                          <span className="text-sm font-medium">{user.username}</span>
+                        </button>
                         <button
                           onClick={handleLogout}
-                          className="text-sm font-medium text-gray-700 hover:text-gray-900"
+                          className="flex items-center space-x-2 px-3 py-2 rounded-md text-red-600 hover:bg-red-50"
+                          title="Sign out"
                         >
-                          Sign out
+                          <LogOut className="h-5 w-5" />
                         </button>
                       </div>
                     )}
@@ -116,7 +130,11 @@ function App() {
                 </div>
               </header>
 
-              <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
+              <Navigation 
+                activeTab={activeTab} 
+                onTabChange={setActiveTab} 
+                includeDrawManagement={true}
+              />
             </>
           )}
 
