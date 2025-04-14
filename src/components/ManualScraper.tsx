@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { scrapePowerball } from '../lib/api';
+
+// Define API URL directly if environment variable isn't working
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 
 const ManualScraper = () => {
   const [loading, setLoading] = useState(false);
@@ -13,14 +15,31 @@ const ManualScraper = () => {
     setSuccess(null);
 
     try {
-      const result = await scrapePowerball();
+      // Direct API call instead of using the api.ts function
+      console.log("Scraping API at:", `${API_URL}/api/scrape/latest`);
+      
+      const response = await fetch(`${API_URL}/api/scrape/latest`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to scrape data');
+      }
+
+      const result = await response.json();
+      
       if (result.success) {
         setSuccess('Successfully scraped latest Powerball data');
       } else {
         throw new Error(result.error || 'Failed to scrape data');
       }
     } catch (err) {
-      setError(err.message);
+      setError(err instanceof Error ? err.message : String(err));
+      console.error("Scraping error:", err);
     } finally {
       setLoading(false);
     }

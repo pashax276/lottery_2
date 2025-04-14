@@ -1,22 +1,86 @@
-version: '3.8'
-
 services:
   frontend:
     build:
       context: .
       target: frontend
+      args:
+        - VITE_API_URL=http://localhost:5001
     ports:
       - "80:80"
     environment:
       - VITE_API_URL=http://localhost:5001
     depends_on:
       - backend
+    networks:
+      - powerball-network
+    restart: unless-stopped
 
   backend:
     build:
       context: .
       target: backend
     ports:
-      - "5002:5002"
+      - "5001:5001"
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
+      - PORT=5001
+      - LOG_LEVEL=info
+      - SECRET_KEY=powerball_secret_key_change_in_production
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=powerball_admin
+      - ADMIN_EMAIL=admin@example.com
+      - ENABLE_SCHEDULER=true
+    depends_on:
+      - db
+    networks:
+      - powerball-network
+    volumes:
+      - backend-data:/app/data
+    restart: unless-stopped
+    command: >
+      bash -c "
+        python main.py &
+        sleep 15 &&
+        python register_admin.py
+      "
+
+  db:
+    image: postgres:14-alpine
+    environment:
+      - POSTGRES_USER=powerball
+      - POSTGRES_PASSWORD=powerball
+      - POSTGRES_DB=powerball
+    ports:
+      - "5432:5432"
+    networks:
+      - powerball-network
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U powerball"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=powerball
+    ports:
+      - "5050:80"
+    networks:
+      - powerball-network
+    depends_on:
+      - db
+    restart: unless-stopped
+
+networks:
+  powerball-network:
+    driver: bridge
+
+volumes:
+  backend-data:
+  postgres-data:
