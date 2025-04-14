@@ -1,17 +1,10 @@
 import React from 'react';
 import { Bell, Shield } from 'lucide-react';
-import AddDraw from './AddDraw';
-import FileUpload from './FileUpload';
 import ManualScraper from './ManualScraper';
 
 const Settings = () => {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <AddDraw />
-        <FileUpload />
-      </div>
-
       <ManualScraper />
 
       <section className="bg-white rounded-lg shadow-sm p-6">
