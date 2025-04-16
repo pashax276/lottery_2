@@ -1,42 +1,132 @@
-import React from 'react';
-import { ArrowUpRight, TrendingUp, Users, DollarSign } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowUpRight, TrendingUp, Users, DollarSign, Calendar } from 'lucide-react';
+import { getDraws, getLatestDraw } from '../lib/api';
+import NumberBall from './NumberBall';
+import LoadingSpinner from './LoadingSpinner';
+
+interface Draw {
+  id: string;
+  draw_number: number;
+  draw_date: string;
+  white_balls: number[];
+  powerball: number;
+  jackpot_amount: number | undefined;
+  winners: number;
+}
 
 const Dashboard = () => {
-  // Mock data - replace with actual API calls
-  const latestDraw = {
-    numbers: [7, 13, 24, 47, 53],
-    powerball: 4,
-    date: '2024-03-15',
-    jackpot: '1.5B',
+  const [latestDraws, setLatestDraws] = useState<Draw[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  const stats = [
+    { label: 'Total Draws', value: '0', icon: TrendingUp, trend: '+0%' },
+    { label: 'Winners', value: '0', icon: Users, trend: '+0%' },
+    { label: 'Latest Jackpot', value: '$0', icon: DollarSign, trend: '+0%' },
+  ];
+
+  useEffect(() => {
+    fetchDraws();
+  }, []);
+
+  const fetchDraws = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const result = await getDraws();
+      
+      if (result && result.draws && result.draws.length > 0) {
+        // Get latest 8 draws
+        const latestEight = result.draws.slice(0, 8);
+        setLatestDraws(latestEight);
+        
+        // Update stats
+        const totalDraws = result.draws.length;
+        const winners = result.draws.filter(draw => draw.winners > 0).length;
+        const latestJackpot = result.draws[0]?.jackpot_amount || 0;
+        
+        stats[0].value = totalDraws.toString();
+        stats[1].value = winners.toString();
+        stats[2].value = `${latestJackpot.toLocaleString()}`;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch draws');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const stats = [
-    { label: 'Total Draws', value: '1,274', icon: TrendingUp, trend: '+12%' },
-    { label: 'Active Users', value: '2.4k', icon: Users, trend: '+8%' },
-    { label: 'Next Jackpot', value: '$1.7B', icon: DollarSign, trend: '+15%' },
-  ];
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <LoadingSpinner size={50} />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 p-6 rounded-lg shadow-sm">
+        <h2 className="text-red-800 text-lg font-medium mb-2">Error loading dashboard</h2>
+        <p className="text-red-600">{error}</p>
+        <button 
+          onClick={fetchDraws}
+          className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       {/* Latest Draw */}
-      <section className="bg-white rounded-lg shadow-sm p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Latest Draw Results</h2>
-        <div className="flex items-center space-x-4">
-          {latestDraw.numbers.map((number, index) => (
-            <div
-              key={index}
-              className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold"
-            >
-              {number}
-            </div>
-          ))}
-          <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold">
-            {latestDraw.powerball}
+      {latestDraws.length > 0 && (
+        <section className="bg-white rounded-lg shadow-sm p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Latest Draw Results</h2>
+          <div className="flex items-center space-x-4">
+            {latestDraws[0].white_balls.map((number, index) => (
+              <NumberBall
+                key={index}
+                number={number}
+                isPowerball={false}
+                size={40}
+              />
+            ))}
+            <NumberBall
+              number={latestDraws[0].powerball}
+              isPowerball={true}
+              size={40}
+            />
           </div>
-        </div>
-        <p className="mt-4 text-sm text-gray-600">Draw Date: {latestDraw.date}</p>
-        <p className="text-sm text-gray-600">Jackpot: ${latestDraw.jackpot}</p>
-      </section>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <p className="text-sm text-gray-500">Draw Number</p>
+              <p className="text-lg font-medium text-gray-900">#{latestDraws[0].draw_number}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">Draw Date</p>
+              <p className="text-lg font-medium text-gray-900">{latestDraws[0].draw_date}</p>
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">Jackpot</p>
+              <p className="text-lg font-medium text-gray-900">
+                {latestDraws[0].jackpot_amount 
+                  ? `${latestDraws[0].jackpot_amount.toLocaleString()}` 
+                  : 'N/A'}
+              </p>
+            </div>
+          </div>
+          
+          {latestDraws[0].winners > 0 && (
+            <div className="mt-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+              Winner
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -60,17 +150,88 @@ const Dashboard = () => {
         })}
       </div>
 
-      {/* Quick Actions */}
+      {/* Recent Draws */}
       <section className="bg-white rounded-lg shadow-sm p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <button className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-            Check My Numbers
-          </button>
-          <button className="w-full py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-            View Predictions
-          </button>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-semibold text-gray-900">Recent Draws</h2>
+          <div className="flex items-center space-x-2 text-sm text-blue-600">
+            <Calendar className="h-4 w-4" />
+            <span>Last 8 Draws</span>
+          </div>
         </div>
+        
+        {latestDraws.length === 0 ? (
+          <div className="text-center py-8">
+            <p className="text-gray-500">No recent draws available</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead>
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Draw #
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Numbers
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Jackpot
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Winner
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {latestDraws.map((draw) => (
+                  <tr key={draw.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {draw.draw_number}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {draw.draw_date}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center space-x-2">
+                        {draw.white_balls.map((number, idx) => (
+                          <NumberBall
+                            key={idx}
+                            number={number}
+                            isPowerball={false}
+                            size={30}
+                          />
+                        ))}
+                        <NumberBall
+                          number={draw.powerball}
+                          isPowerball={true}
+                          size={30}
+                        />
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {draw.jackpot_amount ? `${draw.jackpot_amount.toLocaleString()}` : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      {draw.winners > 0 ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Yes
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                          No
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
     </div>
   );
