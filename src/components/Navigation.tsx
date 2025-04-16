@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, BarChart3, Brain, ClockIcon, Home, Settings as SettingsIcon, Database } from 'lucide-react';
+import { BarChart3, Brain, ClockIcon, Home, Settings as SettingsIcon, Database } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;

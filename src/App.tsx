@@ -8,8 +8,7 @@ import Predictions from './components/Predictions';
 import Analysis from './components/Analysis';
 import History from './components/History';
 import Settings from './components/Settings';
-import UserSettings from './components/UserSettings';
-import DrawManagement from './components/DrawManagement';
+import DrawManagement from './components/DrawManagement'; // Only include if you've created this file
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { getCurrentUser, isAuthenticated, logout } from './lib/api';
@@ -49,6 +48,7 @@ function App() {
   const handleLogin = (token: string, userId: number, username: string) => {
     setAuthenticated(true);
     setUser({ id: userId, username });
+    setActiveTab('dashboard'); // Reset to dashboard on login
   };
 
   const handleLogout = () => {
@@ -81,8 +81,6 @@ function App() {
         return <History />;
       case 'settings':
         return <Settings />;
-      case 'user-settings':
-        return <UserSettings />;
       case 'draw-management':
         return <DrawManagement />;
       default:
@@ -106,17 +104,10 @@ function App() {
                     
                     {user && (
                       <div className="flex items-center space-x-4">
-                        <button
-                          onClick={() => setActiveTab('user-settings')}
-                          className={`flex items-center space-x-2 px-3 py-2 rounded-md ${
-                            activeTab === 'user-settings'
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'text-gray-700 hover:bg-gray-100'
-                          }`}
-                        >
-                          <User className="h-5 w-5" />
+                        <div className="flex items-center space-x-2 px-3 py-2">
+                          <User className="h-5 w-5 text-gray-600" />
                           <span className="text-sm font-medium">{user.username}</span>
-                        </button>
+                        </div>
                         <button
                           onClick={handleLogout}
                           className="flex items-center space-x-2 px-3 py-2 rounded-md text-red-600 hover:bg-red-50"
