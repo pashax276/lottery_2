@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
-import { addDraw, validateDrawParameters } from '../lib/api';
+import { addDraw } from '../lib/api';
 import { showToast } from './Toast';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
@@ -17,6 +17,7 @@ const AddDraw = () => {
   const [numbers, setNumbers] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [drawNumberError, setDrawNumberError] = useState<string | null>(null);
   const [validation, setValidation] = useState<ValidationResult>({ 
     isValid: true, 
     errors: [] 
@@ -28,21 +29,113 @@ const AddDraw = () => {
   useEffect(() => {
     // Only validate if we have values to validate
     if (drawNumber || drawDate || numbers.some(n => n !== '')) {
-      const result = validateDrawParameters(
-        drawNumber,
-        drawDate,
-        numbers.slice(0, 5),
-        numbers[5]
-      );
-      
-      setValidation(result);
-      setShowPreview(result.isValid);
+      validateForm();
     } else {
       // Reset validation if form is empty
       setValidation({ isValid: true, errors: [] });
       setShowPreview(false);
     }
   }, [drawNumber, drawDate, numbers]);
+
+  // Specific validation for draw number with API check
+  useEffect(() => {
+    const validateDrawNumber = async () => {
+      // Only proceed if we have a draw number
+      if (!drawNumber) {
+        setDrawNumberError(null);
+        return;
+      }
+
+      const numDrawNumber = parseInt(drawNumber, 10);
+      
+      // Basic validation
+      if (isNaN(numDrawNumber) || numDrawNumber <= 0) {
+        setDrawNumberError('Draw number must be a positive number');
+        return;
+      }
+
+      try {
+        // Check if draw number already exists
+        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5001'}/api/draws/${numDrawNumber}`);
+        const data = await response.json();
+        
+        if (response.ok && data.draw) {
+          setDrawNumberError(`Draw #${numDrawNumber} already exists`);
+        } else {
+          setDrawNumberError(null);
+        }
+      } catch (err) {
+        // If there's an error with the API call, just continue without the check
+        console.error('Error checking draw number:', err);
+        setDrawNumberError(null);
+      }
+    };
+
+    // Debounce the validation to avoid too many API calls
+    const timeoutId = setTimeout(validateDrawNumber, 500);
+    
+    // Cleanup
+    return () => clearTimeout(timeoutId);
+  }, [drawNumber]);
+
+  const validateForm = () => {
+    const errors: string[] = [];
+    
+    // Convert to numbers for validation
+    const numDrawNumber = drawNumber ? parseInt(drawNumber, 10) : NaN;
+    const numWhiteBalls = numbers.slice(0, 5).map(ball => ball ? parseInt(ball, 10) : NaN);
+    const numPowerball = numbers[5] ? parseInt(numbers[5], 10) : NaN;
+    
+    // Check draw number
+    if (isNaN(numDrawNumber) || numDrawNumber <= 0) {
+      errors.push('Draw number must be a positive number');
+    }
+    
+    // Check draw date
+    if (!drawDate) {
+      errors.push('Draw date is required');
+    } else {
+      // Validate date format (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(drawDate)) {
+        errors.push('Draw date must be in YYYY-MM-DD format');
+      }
+    }
+    
+    // Check white balls
+    if (numWhiteBalls.some(ball => isNaN(ball))) {
+      errors.push('All white balls are required');
+    } else {
+      // Check white ball ranges
+      for (let i = 0; i < numWhiteBalls.length; i++) {
+        if (numWhiteBalls[i] < 1 || numWhiteBalls[i] > 69) {
+          errors.push(`White ball #${i + 1} must be between 1 and 69`);
+        }
+      }
+      
+      // Check for duplicates
+      const uniqueWhiteBalls = new Set(numWhiteBalls);
+      if (uniqueWhiteBalls.size !== 5) {
+        errors.push('White balls must be unique');
+      }
+    }
+    
+    // Check powerball
+    if (isNaN(numPowerball)) {
+      errors.push('Powerball is required');
+    } else if (numPowerball < 1 || numPowerball > 26) {
+      errors.push('Powerball must be between 1 and 26');
+    }
+    
+    const validationResult = {
+      isValid: errors.length === 0 && !drawNumberError,
+      errors
+    };
+    
+    setValidation(validationResult);
+    setShowPreview(validationResult.isValid && numbers.every(n => n !== ''));
+    
+    return validationResult;
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -72,15 +165,10 @@ const AddDraw = () => {
     e.preventDefault();
     
     // Double-check validation
-    const validationResult = validateDrawParameters(
-      drawNumber,
-      drawDate,
-      numbers.slice(0, 5),
-      numbers[5]
-    );
+    const validationResult = validateForm();
     
-    if (!validationResult.isValid) {
-      setError(validationResult.errors.join(', '));
+    if (!validationResult.isValid || drawNumberError) {
+      setError(validationResult.errors.join(', ') || drawNumberError || 'Validation failed');
       return;
     }
     
@@ -104,6 +192,7 @@ const AddDraw = () => {
       setDrawNumber('');
       setDrawDate('');
       setNumbers(['', '', '', '', '', '']);
+      setDrawNumberError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add draw');
       showToast.error(err instanceof Error ? err.message : 'Failed to add draw');
@@ -130,7 +219,7 @@ const AddDraw = () => {
           <div>
             <label htmlFor="drawNumber" className="block text-sm font-medium text-gray-700">
               Draw Number
-              {validation.errors.some(err => err.includes('Draw number')) && (
+              {(validation.errors.some(err => err.includes('Draw number')) || drawNumberError) && (
                 <span className="text-red-500 ml-1">*</span>
               )}
             </label>
@@ -141,13 +230,16 @@ const AddDraw = () => {
               value={drawNumber}
               onChange={handleChange}
               className={`mt-1 block w-full rounded-md ${
-                validation.errors.some(err => err.includes('Draw number'))
+                validation.errors.some(err => err.includes('Draw number')) || drawNumberError
                   ? 'border-red-300 focus:ring-red-500 focus:border-red-500'
                   : 'border-gray-300 focus:ring-blue-500 focus:border-blue-500'
               }`}
               required
             />
-            {validation.errors.some(err => err.includes('Draw number')) && (
+            {drawNumberError && (
+              <p className="mt-1 text-sm text-red-600">{drawNumberError}</p>
+            )}
+            {validation.errors.some(err => err.includes('Draw number')) && !drawNumberError && (
               <p className="mt-1 text-sm text-red-600">
                 {validation.errors.find(err => err.includes('Draw number'))}
               </p>
@@ -272,7 +364,7 @@ const AddDraw = () => {
 
         <button
           type="submit"
-          disabled={loading || !validation.isValid}
+          disabled={loading || !validation.isValid || !!drawNumberError}
           className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
         >
           {loading ? (

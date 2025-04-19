@@ -4,24 +4,12 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import time
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 
-# Configure logging
 logger = logging.getLogger("powerball-analyzer-db")
 
 class DatabaseConnector:
-    """
-    Database connector for PostgreSQL that handles connection and basic CRUD operations
-    """
-    
     def __init__(self, db_url: Optional[str] = None, max_retries: int = 15, retry_interval: int = 10):
-        """
-        Initialize the database connector
-        
-        Args:
-            db_url: The database connection URL (defaults to DATABASE_URL env var)
-            max_retries: Maximum number of connection retries
-            retry_interval: Interval between retries in seconds
-        """
         self.db_url = db_url or os.environ.get('DATABASE_URL', 'postgresql://powerball:powerball@db:5432/powerball')
         self.max_retries = max_retries
         self.retry_interval = retry_interval
@@ -30,12 +18,7 @@ class DatabaseConnector:
         logger.info(f"Database connector initialized with URL: {self.db_url}")
     
     def _parse_connection_params(self) -> Dict[str, str]:
-        """Parse the connection URL into connection parameters"""
-        # Example: postgresql://user:password@host:port/dbname
-        # Remove postgresql://
         params_str = self.db_url.replace('postgresql://', '')
-        
-        # Split user:password@host:port/dbname
         auth_host_db = params_str.split('@')
         if len(auth_host_db) != 2:
             raise ValueError("Invalid database URL format")
@@ -51,7 +34,7 @@ class DatabaseConnector:
         dbname = host_db[1]
         
         if len(host_port) == 1:
-            host, port = host_port[0], '5432'  # Default PostgreSQL port
+            host, port = host_port[0], '5432'
         elif len(host_port) == 2:
             host, port = host_port
         else:
@@ -66,24 +49,17 @@ class DatabaseConnector:
         }
     
     def connect(self) -> bool:
-        """
-        Connect to the database with retries
-        
-        Returns:
-            bool: True if connection succeeded, False otherwise
-        """
         for attempt in range(1, self.max_retries + 1):
             try:
                 if self.conn is not None and not self.conn.closed:
-                    logger.info("Already connected to the database")
+                    logger.debug("Already connected to the database")
                     return True
                 
-                logger.info(f"Connecting to database (attempt {attempt}/{self.max_retries})...")
+                logger.info(f"Connecting to database at {self.db_url} (attempt {attempt}/{self.max_retries})...")
                 
-                # Parse connection parameters
                 conn_params = self._parse_connection_params()
+                logger.debug(f"Connection parameters: {conn_params}")
                 
-                # Connect
                 self.conn = psycopg2.connect(
                     **conn_params,
                     cursor_factory=RealDictCursor,
@@ -106,52 +82,103 @@ class DatabaseConnector:
                 else:
                     logger.error("Maximum connection retries reached. Giving up.")
                     return False
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    if self.conn is not None and not self.conn.closed:
+                        logger.debug("Already connected to the database")
+                        return True
+                    
+                    logger.info(f"Connecting to database at {self.db_url} (attempt {attempt}/{self.max_retries})...")
+                    
+                    conn_params = self._parse_connection_params()
+                    logger.debug(f"Connection parameters: {conn_params}")
+                    
+                    self.conn = psycopg2.connect(
+                        **conn_params,
+                        cursor_factory=RealDictCursor,
+                        keepalives=1,
+                        keepalives_idle=30,
+                        keepalives_interval=10,
+                        keepalives_count=5
+                    )
+                    self.conn.autocommit = True
+                    
+                    logger.info("Successfully connected to the database")
+                    return True
+                
+                except Exception as e:
+                    logger.error(f"Error connecting to database: {str(e)}")
+                    
+                    if attempt < self.max_retries:
+                        logger.info(f"Retrying in {self.retry_interval} seconds...")
+                        time.sleep(self.retry_interval)
+                    else:
+                        logger.error("Maximum connection retries reached. Giving up.")
+                        return False
+                for attempt in range(1, self.max_retries + 1):
+                    try:
+                        if self.conn is not None and not self.conn.closed:
+                            logger.debug("Already connected to the database")
+                            return True
+                        
+                        logger.info(f"Connecting to database (attempt {attempt}/{self.max_retries})...")
+                        
+                        conn_params = self._parse_connection_params()
+                        
+                        self.conn = psycopg2.connect(
+                            **conn_params,
+                            cursor_factory=RealDictCursor,
+                            keepalives=1,
+                            keepalives_idle=30,
+                            keepalives_interval=10,
+                            keepalives_count=5
+                        )
+                        self.conn.autocommit = True
+                        
+                        logger.info("Successfully connected to the database")
+                        return True
+                    
+                    except Exception as e:
+                        logger.error(f"Error connecting to database: {str(e)}")
+                        
+                        if attempt < self.max_retries:
+                            logger.info(f"Retrying in {self.retry_interval} seconds...")
+                            time.sleep(self.retry_interval)
+                        else:
+                            logger.error("Maximum connection retries reached. Giving up.")
+                            return False
     
     def close(self) -> None:
-        """Close the database connection"""
         if self.conn is not None and not self.conn.closed:
             self.conn.close()
             logger.info("Database connection closed")
     
     def execute(self, query: str, params: tuple = None) -> Optional[List[Dict[str, Any]]]:
-        """
-        Execute a query and return the results
-        
-        Args:
-            query: SQL query to execute
-            params: Query parameters
-            
-        Returns:
-            List of dictionaries containing the query results, or None if the query fails
-        """
         if not self.connect():
+            logger.error("Cannot execute query: No database connection")
             return None
         
         try:
             with self.conn.cursor() as cursor:
+                logger.debug(f"Executing query: {query} with params: {params}")
                 cursor.execute(query, params)
                 
-                # Check if the query returns results
                 if cursor.description is not None:
-                    return list(cursor.fetchall())
+                    results = list(cursor.fetchall())
+                    logger.debug(f"Query returned {len(results)} rows: {results}")
+                    return results
                 
+                logger.debug("Query executed successfully (no results)")
                 return None
-        
+            
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
             logger.error(f"Query: {query}")
             logger.error(f"Params: {params}")
-            return None
+            raise  # Re-raise to ensure callers handle the error
     
     def init_schema(self) -> bool:
-        """
-        Initialize the database schema
-        
-        Returns:
-            bool: True if schema initialization succeeded, False otherwise
-        """
         schema_queries = [
-            # Create draws table
             """
             CREATE TABLE IF NOT EXISTS draws (
                 id SERIAL PRIMARY KEY,
@@ -166,8 +193,6 @@ class DatabaseConnector:
                 CONSTRAINT valid_powerball CHECK (powerball >= 1 AND powerball <= 26)
             )
             """,
-            
-            # Create numbers table for individual number storage
             """
             CREATE TABLE IF NOT EXISTS numbers (
                 id SERIAL PRIMARY KEY,
@@ -178,8 +203,6 @@ class DatabaseConnector:
                 CONSTRAINT valid_position CHECK (position >= 1 AND position <= 6)
             )
             """,
-            
-            # Create predictions table
             """
             CREATE TABLE IF NOT EXISTS predictions (
                 id SERIAL PRIMARY KEY,
@@ -194,8 +217,6 @@ class DatabaseConnector:
                 CONSTRAINT valid_powerball CHECK (powerball >= 1 AND powerball <= 26)
             )
             """,
-            
-            # Create expected_combinations table
             """
             CREATE TABLE IF NOT EXISTS expected_combinations (
                 id SERIAL PRIMARY KEY,
@@ -209,8 +230,6 @@ class DatabaseConnector:
                 CONSTRAINT valid_powerball CHECK (powerball >= 1 AND powerball <= 26)
             )
             """,
-            
-            # Create user_checks table
             """
             CREATE TABLE IF NOT EXISTS user_checks (
                 id SERIAL PRIMARY KEY,
@@ -225,8 +244,6 @@ class DatabaseConnector:
                 CONSTRAINT valid_numbers CHECK (array_length(numbers, 1) = 6)
             )
             """,
-            
-            # Create user_stats table
             """
             CREATE TABLE IF NOT EXISTS user_stats (
                 id SERIAL PRIMARY KEY,
@@ -240,7 +257,6 @@ class DatabaseConnector:
             """
         ]
         
-        # Add indexes for performance
         index_queries = [
             "CREATE INDEX IF NOT EXISTS idx_draws_draw_number ON draws(draw_number)",
             "CREATE INDEX IF NOT EXISTS idx_draws_draw_date ON draws(draw_date)",
@@ -254,6 +270,7 @@ class DatabaseConnector:
         
         try:
             for query in schema_queries + index_queries:
+                logger.debug(f"Executing schema query: {query}")
                 self.execute(query)
             
             logger.info("Database schema initialized successfully")
@@ -263,97 +280,179 @@ class DatabaseConnector:
             logger.error(f"Error initializing database schema: {str(e)}")
             return False
 
-    # Draw management methods
     def get_draws(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get draws with pagination"""
         query = """
         SELECT * FROM draws 
         ORDER BY draw_number DESC 
         LIMIT %s OFFSET %s
         """
+        logger.debug(f"Fetching draws with limit={limit}, offset={offset}")
         return self.execute(query, (limit, offset)) or []
     
     def get_draw_by_number(self, draw_number: int) -> Optional[Dict[str, Any]]:
-        """Get a draw by its draw number"""
         query = "SELECT * FROM draws WHERE draw_number = %s"
-        result = self.execute(query, (draw_number,))
-        return result[0] if result else None
+        logger.debug(f"Fetching draw number {draw_number}")
+        try:
+            result = self.execute(query, (draw_number,))
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error fetching draw #{draw_number}: {str(e)}")
+            return None
     
     def get_draw_by_date(self, draw_date: str) -> Optional[Dict[str, Any]]:
-        """Get a draw by its date"""
         query = "SELECT * FROM draws WHERE draw_date = %s"
-        result = self.execute(query, (draw_date,))
-        return result[0] if result else None
+        logger.debug(f"Fetching draw by date {draw_date}")
+        try:
+            result = self.execute(query, (draw_date,))
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error fetching draw by date {draw_date}: {str(e)}")
+            return None
     
     def get_latest_draw(self) -> Optional[Dict[str, Any]]:
-        """Get the latest draw"""
         query = "SELECT * FROM draws ORDER BY draw_number DESC LIMIT 1"
-        result = self.execute(query)
-        return result[0] if result else None
+        logger.debug("Fetching latest draw")
+        try:
+            result = self.execute(query)
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error fetching latest draw: {str(e)}")
+            return None
     
     def add_draw(self, draw_number: int, draw_date: str, white_balls: List[int], 
                  powerball: int, jackpot_amount: float = 0, winners: int = 0) -> Optional[Dict[str, Any]]:
-        """Add a new draw"""
+        logger.info(f"Attempting to add draw #{draw_number} with white_balls={white_balls}, powerball={powerball}, date={draw_date}, jackpot_amount={jackpot_amount}, winners={winners}")
+        
+        # Input validation
+        if not isinstance(draw_number, int) or draw_number <= 0:
+            logger.error(f"Invalid draw_number: {draw_number}")
+            return None
+        
+        if not draw_date or not draw_date.strip():
+            logger.error("Draw date is empty")
+            return None
+        
+        try:
+            datetime.strptime(draw_date, '%Y-%m-%d')
+        except ValueError:
+            logger.error(f"Invalid draw_date format: {draw_date} (expected YYYY-MM-DD)")
+            return None
+        
+        if len(white_balls) != 5:
+            logger.error(f"Invalid white balls count: {len(white_balls)} (expected 5)")
+            return None
+        
+        if any(not isinstance(x, int) or x < 1 or x > 69 for x in white_balls):
+            logger.error(f"Invalid white balls values: {white_balls}")
+            return None
+        
+        if len(set(white_balls)) != 5:
+            logger.error(f"Duplicate white balls: {white_balls}")
+            return None
+        
+        if not isinstance(powerball, int) or powerball < 1 or powerball > 26:
+            logger.error(f"Invalid powerball: {powerball}")
+            return None
+        
         # Check if draw already exists
-        if self.get_draw_by_number(draw_number):
-            logger.warning(f"Draw {draw_number} already exists")
+        existing_draw = self.get_draw_by_number(draw_number)
+        if existing_draw:
+            logger.warning(f"Draw #{draw_number} already exists")
             return None
         
-        # Insert draw
-        query = """
-        INSERT INTO draws 
-        (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners) 
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING *
-        """
-        result = self.execute(query, (
-            draw_number, draw_date, white_balls, powerball, jackpot_amount, winners
-        ))
-        
-        if not result:
+        try:
+            # Disable autocommit for transaction
+            self.conn.autocommit = False
+            with self.conn.cursor() as cursor:
+                # Insert draw
+                query = """
+                INSERT INTO draws 
+                (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners) 
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """
+                logger.debug(f"Inserting draw #{draw_number} into draws table")
+                try:
+                    cursor.execute(query, (
+                        draw_number, draw_date, white_balls, powerball, jackpot_amount, winners
+                    ))
+                except Exception as e:
+                    logger.error(f"Failed to insert draw #{draw_number} into draws table: {str(e)}")
+                    self.conn.rollback()
+                    return None
+                
+                result = cursor.fetchall()
+                if not result:
+                    logger.error(f"Failed to insert draw #{draw_number}: No rows returned")
+                    self.conn.rollback()
+                    return None
+                
+                draw = result[0]
+                logger.debug(f"Inserted draw #{draw_number} with id={draw['id']}")
+                
+                # Insert individual numbers
+                for i, num in enumerate(white_balls):
+                    num_query = """
+                    INSERT INTO numbers (draw_id, position, number, is_powerball) 
+                    VALUES (%s, %s, %s, %s)
+                    """
+                    logger.debug(f"Inserting white ball {num} at position {i+1} for draw #{draw_number}")
+                    try:
+                        cursor.execute(num_query, (draw["id"], i+1, num, False))
+                    except Exception as e:
+                        logger.error(f"Failed to insert white ball {num} at position {i+1} for draw #{draw_number}: {str(e)}")
+                        self.conn.rollback()
+                        return None
+                
+                # Insert powerball
+                pb_query = """
+                INSERT INTO numbers (draw_id, position, number, is_powerball) 
+                VALUES (%s, %s, %s, %s)
+                """
+                logger.debug(f"Inserting powerball {powerball} for draw #{draw_number}")
+                try:
+                    cursor.execute(pb_query, (draw["id"], 6, powerball, True))
+                except Exception as e:
+                    logger.error(f"Failed to insert powerball {powerball} for draw #{draw_number}: {str(e)}")
+                    self.conn.rollback()
+                    return None
+                
+                # Commit transaction
+                self.conn.commit()
+                logger.info(f"Successfully added draw #{draw_number}")
+                return draw
+                
+        except Exception as e:
+            logger.error(f"Unexpected exception while adding draw #{draw_number}: {str(e)}")
+            self.conn.rollback()
             return None
         
-        draw = result[0]
-        
-        # Insert individual numbers
-        for i, num in enumerate(white_balls):
-            self.execute(
-                "INSERT INTO numbers (draw_id, position, number, is_powerball) VALUES (%s, %s, %s, %s)",
-                (draw["id"], i+1, num, False)
-            )
-        
-        # Insert powerball
-        self.execute(
-            "INSERT INTO numbers (draw_id, position, number, is_powerball) VALUES (%s, %s, %s, %s)",
-            (draw["id"], 6, powerball, True)
-        )
-        
-        return draw
+        finally:
+            self.conn.autocommit = True
     
-    # Prediction methods
     def add_prediction(self, white_balls: List[int], powerball: int, 
                       confidence: float, method: str, rationale: str, 
                       user_id: str = "anonymous") -> Optional[Dict[str, Any]]:
-        """Add a new prediction"""
+        logger.debug(f"Adding prediction with white_balls={white_balls}, powerball={powerball}, method={method}")
         query = """
         INSERT INTO predictions 
         (white_balls, powerball, confidence, method, rationale, user_id) 
         VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING *
         """
-        result = self.execute(query, (
-            white_balls, powerball, confidence, method, rationale, user_id
-        ))
-        
-        if result:
-            # Update user stats
-            self.update_user_stat(user_id, "predictions_made")
-        
-        return result[0] if result else None
+        try:
+            result = self.execute(query, (
+                white_balls, powerball, confidence, method, rationale, user_id
+            ))
+            if result:
+                self.update_user_stat(user_id, "predictions_made")
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error adding prediction: {str(e)}")
+            return None
     
     def get_predictions(self, method: str = None, user_id: str = None, 
                        limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get predictions with filtering"""
         query = "SELECT * FROM predictions WHERE 1=1"
         params = []
         
@@ -368,62 +467,76 @@ class DatabaseConnector:
         query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
         params.extend([limit, offset])
         
-        return self.execute(query, tuple(params)) or []
+        logger.debug(f"Fetching predictions with method={method}, user_id={user_id}, limit={limit}, offset={offset}")
+        try:
+            return self.execute(query, tuple(params)) or []
+        except Exception as e:
+            logger.error(f"Error fetching predictions: {str(e)}")
+            return []
     
-    # Expected combinations methods
     def add_expected_combination(self, white_balls: List[int], powerball: int, 
                                score: float, method: str, reason: str) -> Optional[Dict[str, Any]]:
-        """Add a new expected combination"""
+        logger.debug(f"Adding expected combination with white_balls={white_balls}, powerball={powerball}")
         query = """
         INSERT INTO expected_combinations 
         (white_balls, powerball, score, method, reason) 
         VALUES (%s, %s, %s, %s, %s)
         RETURNING *
         """
-        result = self.execute(query, (
-            white_balls, powerball, score, method, reason
-        ))
-        
-        return result[0] if result else None
+        try:
+            result = self.execute(query, (
+                white_balls, powerball, score, method, reason
+            ))
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error adding expected combination: {str(e)}")
+            return None
     
     def get_expected_combinations(self, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get expected combinations"""
         query = """
         SELECT * FROM expected_combinations 
         ORDER BY score DESC 
         LIMIT %s OFFSET %s
         """
-        return self.execute(query, (limit, offset)) or []
+        logger.debug(f"Fetching expected combinations with limit={limit}, offset={offset}")
+        try:
+            return self.execute(query, (limit, offset)) or []
+        except Exception as e:
+            logger.error(f"Error fetching expected combinations: {str(e)}")
+            return []
     
     def clear_expected_combinations(self) -> bool:
-        """Clear all expected combinations"""
         query = "DELETE FROM expected_combinations"
-        self.execute(query)
-        return True
+        logger.debug("Clearing expected combinations")
+        try:
+            self.execute(query)
+            return True
+        except Exception as e:
+            logger.error(f"Error clearing expected combinations: {str(e)}")
+            return False
     
-    # User checks methods
     def add_user_check(self, user_id: str, draw_id: int, numbers: List[int], 
                       white_matches: List[int], powerball_match: bool, 
                       is_winner: bool, prize: str) -> Optional[Dict[str, Any]]:
-        """Add a new user check"""
+        logger.debug(f"Adding user check for user_id={user_id}, draw_id={draw_id}")
         query = """
         INSERT INTO user_checks 
         (user_id, draw_id, numbers, white_matches, powerball_match, is_winner, prize) 
         VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """
-        result = self.execute(query, (
-            user_id, draw_id, numbers, white_matches, powerball_match, is_winner, prize
-        ))
-        
-        if result:
-            # Update user stats
-            self.update_user_stat(user_id, "analysis_runs")
-        
-        return result[0] if result else None
+        try:
+            result = self.execute(query, (
+                user_id, draw_id, numbers, white_matches, powerball_match, is_winner, prize
+            ))
+            if result:
+                self.update_user_stat(user_id, "analysis_runs")
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error adding user check: {str(e)}")
+            return None
     
     def get_user_checks(self, user_id: str, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get user checks"""
         query = """
         SELECT uc.*, d.draw_number, d.draw_date, d.white_balls as draw_white_balls, d.powerball as draw_powerball
         FROM user_checks uc
@@ -432,53 +545,61 @@ class DatabaseConnector:
         ORDER BY uc.created_at DESC
         LIMIT %s OFFSET %s
         """
-        return self.execute(query, (user_id, limit, offset)) or []
+        logger.debug(f"Fetching user checks for user_id={user_id}, limit={limit}, offset={offset}")
+        try:
+            return self.execute(query, (user_id, limit, offset)) or []
+        except Exception as e:
+            logger.error(f"Error fetching user checks: {str(e)}")
+            return []
     
-    # User stats methods
     def get_user_stats(self, user_id: str) -> Dict[str, Any]:
-        """Get user stats"""
         query = "SELECT * FROM user_stats WHERE user_id = %s"
-        result = self.execute(query, (user_id,))
-        
-        if not result:
-            # Create new user stats
-            query = """
-            INSERT INTO user_stats (user_id) VALUES (%s) 
-            RETURNING *
-            """
+        logger.debug(f"Fetching user stats for user_id={user_id}")
+        try:
             result = self.execute(query, (user_id,))
-        
-        return result[0] if result else {
-            "user_id": user_id,
-            "draws_added": 0,
-            "predictions_made": 0,
-            "analysis_runs": 0
-        }
+            if not result:
+                query = """
+                INSERT INTO user_stats (user_id) VALUES (%s) 
+                RETURNING *
+                """
+                result = self.execute(query, (user_id,))
+            return result[0] if result else {
+                "user_id": user_id,
+                "draws_added": 0,
+                "predictions_made": 0,
+                "analysis_runs": 0
+            }
+        except Exception as e:
+            logger.error(f"Error fetching user stats: {str(e)}")
+            return {
+                "user_id": user_id,
+                "draws_added": 0,
+                "predictions_made": 0,
+                "analysis_runs": 0
+            }
     
     def update_user_stat(self, user_id: str, field: str) -> Optional[Dict[str, Any]]:
-        """Update a specific user stat"""
         valid_fields = ["draws_added", "predictions_made", "analysis_runs"]
         if field not in valid_fields:
             logger.error(f"Invalid user stat field: {field}")
             return None
         
-        # Get current stats
-        stats = self.get_user_stats(user_id)
-        
-        # Update the field
         query = f"""
         UPDATE user_stats 
         SET {field} = {field} + 1, updated_at = NOW() 
         WHERE user_id = %s
         RETURNING *
         """
-        result = self.execute(query, (user_id,))
-        
-        return result[0] if result else None
+        logger.debug(f"Updating user stat {field} for user_id={user_id}")
+        try:
+            result = self.execute(query, (user_id,))
+            return result[0] if result else None
+        except Exception as e:
+            logger.error(f"Error updating user stat {field}: {str(e)}")
+            return None
     
-    # Analysis methods
     def get_frequency_analysis(self) -> Dict[str, Dict[str, int]]:
-        """Get frequency analysis of numbers"""
+        logger.debug("Fetching frequency analysis")
         white_query = """
         SELECT number, COUNT(*) as count
         FROM numbers
@@ -495,25 +616,29 @@ class DatabaseConnector:
         ORDER BY number
         """
         
-        white_results = self.execute(white_query) or []
-        powerball_results = self.execute(powerball_query) or []
-        
-        white_freq = {str(i): 0 for i in range(1, 70)}
-        pb_freq = {str(i): 0 for i in range(1, 27)}
-        
-        for row in white_results:
-            white_freq[str(row["number"])] = row["count"]
-        
-        for row in powerball_results:
-            pb_freq[str(row["number"])] = row["count"]
-        
-        return {
-            "white_balls": white_freq,
-            "powerballs": pb_freq
-        }
+        try:
+            white_results = self.execute(white_query) or []
+            powerball_results = self.execute(powerball_query) or []
+            
+            white_freq = {str(i): 0 for i in range(1, 70)}
+            pb_freq = {str(i): 0 for i in range(1, 27)}
+            
+            for row in white_results:
+                white_freq[str(row["number"])] = row["count"]
+            
+            for row in powerball_results:
+                pb_freq[str(row["number"])] = row["count"]
+            
+            return {
+                "white_balls": white_freq,
+                "powerballs": pb_freq
+            }
+        except Exception as e:
+            logger.error(f"Error fetching frequency analysis: {str(e)}")
+            return {"white_balls": {}, "powerballs": {}}
     
     def get_position_analysis(self) -> List[Dict[str, Any]]:
-        """Get analysis of numbers by position"""
+        logger.debug("Fetching position analysis")
         query = """
         SELECT position, number, COUNT(*) as count
         FROM numbers
@@ -521,32 +646,34 @@ class DatabaseConnector:
         GROUP BY position, number
         ORDER BY position, count DESC
         """
-        results = self.execute(query) or []
-        
-        # Group by position
-        positions = {}
-        for row in results:
-            pos = row["position"]
-            if pos not in positions:
-                positions[pos] = []
+        try:
+            results = self.execute(query) or []
             
-            positions[pos].append({
-                "number": row["number"],
-                "count": row["count"]
-            })
-        
-        # Format the response
-        response = []
-        for pos in sorted(positions.keys()):
-            response.append({
-                "position": pos,
-                "top_numbers": positions[pos][:5]  # Top 5 numbers for each position
-            })
-        
-        return response
+            positions = {}
+            for row in results:
+                pos = row["position"]
+                if pos not in positions:
+                    positions[pos] = []
+                
+                positions[pos].append({
+                    "number": row["number"],
+                    "count": row["count"]
+                })
+            
+            response = []
+            for pos in sorted(positions.keys()):
+                response.append({
+                    "position": pos,
+                    "top_numbers": positions[pos][:5]
+                })
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error fetching position analysis: {str(e)}")
+            return []
     
     def get_pair_analysis(self) -> List[Dict[str, Any]]:
-        """Get analysis of number pairs"""
+        logger.debug("Fetching pair analysis")
         query = """
         SELECT 
             LEAST(n1.number, n2.number) as num1,
@@ -562,58 +689,60 @@ class DatabaseConnector:
         ORDER BY count DESC
         LIMIT 15
         """
-        results = self.execute(query) or []
-        
-        return [{"pair": [row["num1"], row["num2"]], "count": row["count"]} for row in results]
+        try:
+            results = self.execute(query) or []
+            return [{"pair": [row["num1"], row["num2"]], "count": row["count"]} for row in results]
+        except Exception as e:
+            logger.error(f"Error fetching pair analysis: {str(e)}")
+            return []
     
     def get_hot_numbers(self, limit: int = 10) -> Dict[str, Dict[str, int]]:
-        """Get the most frequently drawn numbers in recent draws"""
-        # Get the last 20 draws
+        logger.debug(f"Fetching hot numbers with limit={limit}")
         latest_draws_query = """
         SELECT id FROM draws
         ORDER BY draw_date DESC
         LIMIT 20
         """
-        latest_draws = self.execute(latest_draws_query) or []
-        
-        if not latest_draws:
+        try:
+            latest_draws = self.execute(latest_draws_query) or []
+            
+            if not latest_draws:
+                return {"white_balls": {}, "powerballs": {}}
+            
+            draw_ids = [str(draw["id"]) for draw in latest_draws]
+            ids_str = ",".join(draw_ids)
+            
+            white_query = f"""
+            SELECT number, COUNT(*) as count
+            FROM numbers
+            WHERE is_powerball = FALSE AND draw_id IN ({ids_str})
+            GROUP BY number
+            ORDER BY count DESC
+            LIMIT {limit}
+            """
+            
+            powerball_query = f"""
+            SELECT number, COUNT(*) as count
+            FROM numbers
+            WHERE is_powerball = TRUE AND draw_id IN ({ids_str})
+            GROUP BY number
+            ORDER BY count DESC
+            LIMIT 5
+            """
+            
+            white_results = self.execute(white_query) or []
+            powerball_results = self.execute(powerball_query) or []
+            
+            return {
+                "white_balls": {str(row["number"]): row["count"] for row in white_results},
+                "powerballs": {str(row["number"]): row["count"] for row in powerball_results}
+            }
+        except Exception as e:
+            logger.error(f"Error fetching hot numbers: {str(e)}")
             return {"white_balls": {}, "powerballs": {}}
-        
-        # Extract draw IDs
-        draw_ids = [str(draw["id"]) for draw in latest_draws]
-        ids_str = ",".join(draw_ids)
-        
-        # Get hot white balls
-        white_query = f"""
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = FALSE AND draw_id IN ({ids_str})
-        GROUP BY number
-        ORDER BY count DESC
-        LIMIT {limit}
-        """
-        
-        # Get hot powerballs
-        powerball_query = f"""
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = TRUE AND draw_id IN ({ids_str})
-        GROUP BY number
-        ORDER BY count DESC
-        LIMIT 5
-        """
-        
-        white_results = self.execute(white_query) or []
-        powerball_results = self.execute(powerball_query) or []
-        
-        return {
-            "white_balls": {str(row["number"]): row["count"] for row in white_results},
-            "powerballs": {str(row["number"]): row["count"] for row in powerball_results}
-        }
     
     def get_due_numbers(self, limit: int = 10) -> Dict[str, Dict[str, int]]:
-        """Get the least recently drawn numbers"""
-        # First, get all numbers that have appeared
+        logger.debug(f"Fetching due numbers with limit={limit}")
         white_query = """
         SELECT number, MAX(d.draw_number) as last_draw
         FROM numbers n
@@ -634,10 +763,14 @@ class DatabaseConnector:
         LIMIT 5
         """
         
-        white_results = self.execute(white_query, (limit,)) or []
-        powerball_results = self.execute(powerball_query) or []
-        
-        return {
-            "white_balls": {str(row["number"]): row["last_draw"] for row in white_results},
-            "powerballs": {str(row["number"]): row["last_draw"] for row in powerball_results}
-        }
+        try:
+            white_results = self.execute(white_query, (limit,)) or []
+            powerball_results = self.execute(powerball_query) or []
+            
+            return {
+                "white_balls": {str(row["number"]): row["last_draw"] for row in white_results},
+                "powerballs": {str(row["number"]): row["last_draw"] for row in powerball_results}
+            }
+        except Exception as e:
+            logger.error(f"Error fetching due numbers: {str(e)}")
+            return {"white_balls": {}, "powerballs": {}}

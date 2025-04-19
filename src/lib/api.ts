@@ -195,18 +195,90 @@ export async function addDraw(
 ) {
   logger.info('Adding new draw', { drawNumber, drawDate, whiteBalls, powerball });
   
-  return fetchWithLogging('/api/draws/add', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      draw_number: drawNumber,
-      draw_date: drawDate,
-      white_balls: whiteBalls,
-      powerball: powerball,
-      jackpot_amount: jackpotAmount,
-      winners: winners,
-    }),
-  });
+  // Validate inputs before sending
+  if (!drawNumber || !drawDate || !whiteBalls || whiteBalls.length !== 5 || !powerball) {
+    const error = 'Invalid draw data provided';
+    logger.error(error, { drawNumber, drawDate, whiteBalls, powerball });
+    throw new Error(error);
+  }
+
+  try {
+    const token = getAuthToken();
+    if (!token) {
+      const error = 'Authentication required to add draws';
+      logger.error(error);
+      throw new Error(error);
+    }
+
+    const url = `${API_URL}/api/draws/add`;
+    logger.info(`Making request to: ${url}`);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        draw_number: drawNumber,
+        draw_date: drawDate,
+        white_balls: whiteBalls,
+        powerball: powerball,
+        jackpot_amount: jackpotAmount,
+        winners: winners,
+      }),
+    });
+    
+    // Log raw response for debugging
+    const responseText = await response.text();
+    logger.info(`Raw response: ${responseText}`);
+    
+    // Parse the response as JSON if possible
+    let responseData;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch (e) {
+      logger.error('Failed to parse response as JSON', { text: responseText });
+      throw new Error(`Server response is not valid JSON: ${responseText}`);
+    }
+    
+    if (!response.ok) {
+      const errorMessage = responseData?.detail || `Server returned ${response.status}: ${responseText}`;
+      logger.error('Add draw request failed', { status: response.status, error: errorMessage });
+      throw new Error(errorMessage);
+    }
+
+    // Verify that the draw was successfully added
+    if (!responseData.success || !responseData.draw) {
+      const error = 'Server indicated success but no draw data was returned';
+      logger.error(error, responseData);
+      throw new Error(error);
+    }
+    
+    logger.info('Successfully added draw', { 
+      drawNumber, 
+      drawDate, 
+      responseData 
+    });
+    
+    // Immediately verify the draw was added by fetching it
+    try {
+      const verification = await getDrawByNumber(drawNumber);
+      if (!verification || !verification.draw) {
+        logger.error('Draw verification failed - draw not found after adding', { drawNumber });
+        throw new Error('Draw was not successfully added to the database');
+      }
+      logger.info('Draw verified in database', { drawNumber });
+    } catch (e) {
+      logger.error('Draw verification failed', { drawNumber, error: e });
+      throw new Error('Could not verify draw was added to database');
+    }
+    
+    return responseData;
+  } catch (error) {
+    logger.error('Error in addDraw function', error);
+    throw error;
+  }
 }
 
 /**

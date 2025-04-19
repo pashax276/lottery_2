@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toast } from './components/Toast';
+import { showToast } from './components/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
 import Navigation from './components/Navigation';
 import Dashboard from './components/Dashboard';
@@ -8,7 +9,7 @@ import Predictions from './components/Predictions';
 import Analysis from './components/Analysis';
 import History from './components/History';
 import Settings from './components/Settings';
-import DrawManagement from './components/DrawManagement'; // Only include if you've created this file
+import DrawManagement from './components/DrawManagement';
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { getCurrentUser, isAuthenticated, logout } from './lib/api';
@@ -28,6 +29,7 @@ function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [user, setUser] = useState<{ id: number; username: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authRedirectRequired, setAuthRedirectRequired] = useState(false);
 
   // Check authentication status on mount
   useEffect(() => {
@@ -45,16 +47,48 @@ function App() {
     checkAuth();
   }, []);
 
+  // Handle tab change
+  const handleTabChange = (tab: string) => {
+    // If we got redirected to login due to auth error, remember the tab
+    if (authRedirectRequired) {
+      localStorage.setItem('lastActiveTab', tab);
+    }
+    setActiveTab(tab);
+  };
+
   const handleLogin = (token: string, userId: number, username: string) => {
     setAuthenticated(true);
     setUser({ id: userId, username });
-    setActiveTab('dashboard'); // Reset to dashboard on login
+    setAuthRedirectRequired(false);
+    
+    // Check if we have a stored tab to navigate back to
+    const lastTab = localStorage.getItem('lastActiveTab');
+    if (lastTab) {
+      setActiveTab(lastTab);
+      localStorage.removeItem('lastActiveTab');
+    } else {
+      setActiveTab('dashboard'); // Default to dashboard
+    }
+    
+    showToast.success('Logged in successfully');
   };
 
   const handleLogout = () => {
     logout();
     setAuthenticated(false);
     setUser(null);
+    setActiveTab('dashboard');
+    showToast.success('Logged out successfully');
+  };
+
+  // Handle auth errors
+  const handleAuthError = () => {
+    // Remember current tab for after login
+    localStorage.setItem('lastActiveTab', activeTab);
+    setAuthRedirectRequired(true);
+    setAuthenticated(false);
+    setUser(null);
+    showToast.error('Your session has expired. Please log in again.');
   };
 
   const renderContent = () => {
@@ -70,21 +104,24 @@ function App() {
       return <Login onLogin={handleLogin} />;
     }
 
+    // Provide the handleAuthError function to all components
+    const commonProps = { onAuthError: handleAuthError };
+
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard {...commonProps} />;
       case 'predictions':
-        return <Predictions />;
+        return <Predictions {...commonProps} />;
       case 'analysis':
-        return <Analysis />;
+        return <Analysis {...commonProps} />;
       case 'history':
-        return <History />;
+        return <History {...commonProps} />;
       case 'settings':
-        return <Settings />;
+        return <Settings {...commonProps} />;
       case 'draw-management':
-        return <DrawManagement />;
+        return <DrawManagement {...commonProps} />;
       default:
-        return <Dashboard />;
+        return <Dashboard {...commonProps} />;
     }
   };
 
@@ -123,7 +160,7 @@ function App() {
 
               <Navigation 
                 activeTab={activeTab} 
-                onTabChange={setActiveTab} 
+                onTabChange={handleTabChange} 
                 includeDrawManagement={true}
               />
             </>

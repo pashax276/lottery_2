@@ -1,0 +1,81 @@
+2025-04-19 07:57:56.123 UTC [41] LOG:  starting PostgreSQL 14.17 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 14.2.0) 14.2.0, 64-bit
+2025-04-19 07:57:56.127 UTC [41] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2025-04-19 07:57:56.139 UTC [43] LOG:  database system was shut down at 2025-04-19 07:57:55 UTC
+2025-04-19 07:57:56.140 UTC [43] DEBUG:  checkpoint record is at 0/17055D8
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  redo record is at 0/17055D8; shutdown true
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  next transaction ID: 734; next OID: 13824
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  next MultiXactId: 1; next MultiXactOffset: 0
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  oldest unfrozen transaction ID: 727, in database 1
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  oldest MultiXactId: 1, in database 1
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  commit timestamp Xid oldest/newest: 0/0
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  transaction ID wrap limit is 2147484374, limited by database with OID 1
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  starting up replication slots
+2025-04-19 07:57:56.141 UTC [43] DEBUG:  xmin required by slots: data 0, catalog 0
+2025-04-19 07:57:56.144 UTC [43] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:57:56.144 UTC [43] DEBUG:  MultiXact member stop limit is now 4294914944 based on MultiXact 1
+2025-04-19 07:57:56.153 UTC [47] DEBUG:  autovacuum launcher started
+2025-04-19 07:57:56.154 UTC [41] DEBUG:  starting background worker process "logical replication launcher"
+2025-04-19 07:57:56.155 UTC [41] LOG:  database system is ready to accept connections
+2025-04-19 07:57:56.155 UTC [49] DEBUG:  logical replication launcher started
+2025-04-19 07:57:56.195 UTC [52] LOG:  statement: SELECT 1 FROM pg_database WHERE datname = 'powerball' ;
+2025-04-19 07:57:56.210 UTC [54] LOG:  statement: CREATE DATABASE "powerball" ;
+2025-04-19 07:57:56.211 UTC [44] DEBUG:  performing replication slot checkpoint
+2025-04-19 07:57:56.329 UTC [44] DEBUG:  performing replication slot checkpoint
+2025-04-19 07:57:56.340 UTC [41] LOG:  received fast shutdown request
+2025-04-19 07:57:56.343 UTC [41] LOG:  aborting any active transactions
+2025-04-19 07:57:56.344 UTC [47] DEBUG:  autovacuum launcher shutting down
+2025-04-19 07:57:56.344 UTC [49] DEBUG:  logical replication launcher shutting down
+2025-04-19 07:57:56.346 UTC [41] LOG:  background worker "logical replication launcher" (PID 49) exited with exit code 1
+2025-04-19 07:57:56.346 UTC [44] LOG:  shutting down
+2025-04-19 07:57:56.347 UTC [44] DEBUG:  performing replication slot checkpoint
+2025-04-19 07:57:56.355 UTC [41] LOG:  database system is shut down
+2025-04-19 07:57:56.356 UTC [42] DEBUG:  logger shutting down
+2025-04-19 07:57:56.472 UTC [1] LOG:  starting PostgreSQL 14.17 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 14.2.0) 14.2.0, 64-bit
+2025-04-19 07:57:56.472 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2025-04-19 07:57:56.472 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2025-04-19 07:57:56.474 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2025-04-19 07:57:56.483 UTC [58] LOG:  database system was shut down at 2025-04-19 07:57:56 UTC
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  checkpoint record is at 0/1705EA0
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  redo record is at 0/1705EA0; shutdown true
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  next transaction ID: 735; next OID: 16385
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  next MultiXactId: 1; next MultiXactOffset: 0
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  oldest unfrozen transaction ID: 727, in database 1
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  oldest MultiXactId: 1, in database 1
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  commit timestamp Xid oldest/newest: 0/0
+2025-04-19 07:57:56.484 UTC [58] DEBUG:  transaction ID wrap limit is 2147484374, limited by database with OID 1
+2025-04-19 07:57:56.485 UTC [58] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:57:56.485 UTC [58] DEBUG:  starting up replication slots
+2025-04-19 07:57:56.485 UTC [58] DEBUG:  xmin required by slots: data 0, catalog 0
+2025-04-19 07:57:56.485 UTC [58] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:57:56.485 UTC [58] DEBUG:  MultiXact member stop limit is now 4294914944 based on MultiXact 1
+2025-04-19 07:57:56.492 UTC [1] DEBUG:  starting background worker process "logical replication launcher"
+2025-04-19 07:57:56.493 UTC [1] LOG:  database system is ready to accept connections
+2025-04-19 07:57:56.493 UTC [62] DEBUG:  autovacuum launcher started
+2025-04-19 07:57:56.494 UTC [64] DEBUG:  logical replication launcher started
+2025-04-19 07:58:56.598 UTC [107] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:59:56.586 UTC [150] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:00:26.605 UTC [172] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:00:56.635 UTC [194] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:01:26.616 UTC [209] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:01:56.829 UTC [232] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:02:26.628 UTC [254] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:02:56.530 UTC [59] DEBUG:  performing replication slot checkpoint
+2025-04-19 08:02:56.702 UTC [276] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:03:26.634 UTC [298] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:03:56.709 UTC [321] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:04:26.656 UTC [343] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:04:56.713 UTC [365] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:05:26.671 UTC [387] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:05:56.739 UTC [409] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:06:26.681 UTC [431] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:06:56.745 UTC [452] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 08:07:26.701 UTC [474] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 08:07:53.149 UTC [1] LOG:  received fast shutdown request
+2025-04-19 08:07:53.152 UTC [1] LOG:  aborting any active transactions
+2025-04-19 08:07:53.153 UTC [62] DEBUG:  autovacuum launcher shutting down
+2025-04-19 08:07:53.156 UTC [64] DEBUG:  logical replication launcher shutting down
+2025-04-19 08:07:53.186 UTC [1] LOG:  background worker "logical replication launcher" (PID 64) exited with exit code 1
+2025-04-19 08:07:53.186 UTC [59] LOG:  shutting down
+2025-04-19 08:07:53.188 UTC [59] DEBUG:  performing replication slot checkpoint
+2025-04-19 08:07:53.203 UTC [1] LOG:  database system is shut down

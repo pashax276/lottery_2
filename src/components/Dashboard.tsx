@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowUpRight, TrendingUp, Users, DollarSign, Calendar } from 'lucide-react';
-import { getDraws, getLatestDraw } from '../lib/api';
+import { ArrowUpRight, TrendingUp, Users, DollarSign, Calendar, RefreshCw } from 'lucide-react';
+import { getDraws } from '../lib/api';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 
@@ -37,18 +37,18 @@ const Dashboard = () => {
       const result = await getDraws();
       
       if (result && result.draws && result.draws.length > 0) {
-        // Get latest 8 draws
         const latestEight = result.draws.slice(0, 8);
         setLatestDraws(latestEight);
         
-        // Update stats
         const totalDraws = result.draws.length;
         const winners = result.draws.filter(draw => draw.winners > 0).length;
         const latestJackpot = result.draws[0]?.jackpot_amount || 0;
         
         stats[0].value = totalDraws.toString();
         stats[1].value = winners.toString();
-        stats[2].value = `${latestJackpot.toLocaleString()}`;
+        stats[2].value = `$${latestJackpot.toLocaleString()}`;
+      } else {
+        setLatestDraws([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch draws');
@@ -82,12 +82,23 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
+      {/* Refresh Button */}
+      <div className="flex justify-end">
+        <button
+          onClick={fetchDraws}
+          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center"
+        >
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh Data
+        </button>
+      </div>
+
       {/* Latest Draw */}
-      {latestDraws.length > 0 && (
+      {latestDraws.length > 0 ? (
         <section className="bg-white rounded-lg shadow-sm p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Latest Draw Results</h2>
           <div className="flex items-center space-x-4">
-            {latestDraws[0].white_balls.map((number, index) => (
+            {latestDraws[0]?.white_balls?.map((number, index) => (
               <NumberBall
                 key={index}
                 number={number}
@@ -95,36 +106,43 @@ const Dashboard = () => {
                 size={40}
               />
             ))}
-            <NumberBall
-              number={latestDraws[0].powerball}
-              isPowerball={true}
-              size={40}
-            />
+            {latestDraws[0]?.powerball && (
+              <NumberBall
+                number={latestDraws[0].powerball}
+                isPowerball={true}
+                size={40}
+              />
+            )}
           </div>
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <p className="text-sm text-gray-500">Draw Number</p>
-              <p className="text-lg font-medium text-gray-900">#{latestDraws[0].draw_number}</p>
+              <p className="text-lg font-medium text-gray-900">#{latestDraws[0]?.draw_number || 'N/A'}</p>
             </div>
             <div>
               <p className="text-sm text-gray-500">Draw Date</p>
-              <p className="text-lg font-medium text-gray-900">{latestDraws[0].draw_date}</p>
+              <p className="text-lg font-medium text-gray-900">{latestDraws[0]?.draw_date || 'N/A'}</p>
             </div>
             <div>
               <p className="text-sm text-gray-500">Jackpot</p>
               <p className="text-lg font-medium text-gray-900">
-                {latestDraws[0].jackpot_amount 
-                  ? `${latestDraws[0].jackpot_amount.toLocaleString()}` 
+                {latestDraws[0]?.jackpot_amount 
+                  ? `$${latestDraws[0].jackpot_amount.toLocaleString()}` 
                   : 'N/A'}
               </p>
             </div>
           </div>
           
-          {latestDraws[0].winners > 0 && (
+          {latestDraws[0]?.winners > 0 && (
             <div className="mt-3 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
               Winner
             </div>
           )}
+        </section>
+      ) : (
+        <section className="bg-white rounded-lg shadow-sm p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Latest Draw Results</h2>
+          <p className="text-gray-500">No draws available</p>
         </section>
       )}
 
@@ -182,49 +200,45 @@ const Dashboard = () => {
                     Jackpot
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Winner
+                    Winners
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="divide-y divide-gray-200">
                 {latestDraws.map((draw) => (
-                  <tr key={draw.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {draw.draw_number}
+                  <tr key={draw.id}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      #{draw.draw_number}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {draw.draw_date}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center space-x-2">
-                        {draw.white_balls.map((number, idx) => (
+                      <div className="flex space-x-2">
+                        {draw.white_balls?.map((number, index) => (
                           <NumberBall
-                            key={idx}
+                            key={index}
                             number={number}
                             isPowerball={false}
                             size={30}
                           />
                         ))}
-                        <NumberBall
-                          number={draw.powerball}
-                          isPowerball={true}
-                          size={30}
-                        />
+                        {draw.powerball && (
+                          <NumberBall
+                            number={draw.powerball}
+                            isPowerball={true}
+                            size={30}
+                          />
+                        )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {draw.jackpot_amount ? `${draw.jackpot_amount.toLocaleString()}` : 'N/A'}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {draw.jackpot_amount 
+                        ? `$${draw.jackpot_amount.toLocaleString()}` 
+                        : 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {draw.winners > 0 ? (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                          Yes
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                          No
-                        </span>
-                      )}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {draw.winners}
                     </td>
                   </tr>
                 ))}
