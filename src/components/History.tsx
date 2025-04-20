@@ -4,13 +4,20 @@ import { getDraws } from '../lib/api';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
+import { 
+  safelyParseNumber, 
+  isValidArray, 
+  processWhiteBalls,
+  processPowerball,
+  processPgArray
+} from '../utils/dataUtils';
 
 interface Draw {
   id: string;
   draw_number: number;
   draw_date: string;
-  white_balls: number[];
-  powerball: number;
+  white_balls: any; // Could be array, string, or other format
+  powerball: any;
   jackpot_amount: number;
   winners: number;
 }
@@ -22,12 +29,12 @@ const History = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalDraws, setTotalDraws] = useState(0);
   const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
   const [isMarkingWinner, setIsMarkingWinner] = useState(false);
 
-  // Items per page
-  const itemsPerPage = 10;
+  // Items per page (increased to handle larger datasets)
+  const itemsPerPage = 20;
 
   useEffect(() => {
     fetchDraws();
@@ -38,21 +45,62 @@ const History = () => {
     setError(null);
     
     try {
-      const response = await getDraws();
+      // Get all draws with a high limit to ensure we get all records
+      const response = await getDraws(1000, 0);
       
-      if (response && response.success && Array.isArray(response.draws)) {
-        setDraws(response.draws);
-        setTotalPages(Math.ceil(response.draws.length / itemsPerPage));
+      console.log('Raw API response:', response);
+      
+      if (response && response.draws) {
+        // Debug the first draw
+        if (response.draws.length > 0) {
+          const firstDraw = response.draws[0];
+          console.log('First draw from API:', firstDraw);
+          console.log('white_balls type:', typeof firstDraw.white_balls);
+          console.log('white_balls value:', firstDraw.white_balls);
+          
+          // Try to understand the format of white_balls
+          if (typeof firstDraw.white_balls === 'string') {
+            console.log('white_balls as string:', firstDraw.white_balls);
+          } else if (Array.isArray(firstDraw.white_balls)) {
+            console.log('white_balls as array:', firstDraw.white_balls);
+          }
+        }
+        
+        // Process the draws
+        const processedDraws = response.draws.map((draw: any) => {
+          // Process the white balls
+          const whiteBalls = processWhiteBalls(draw.white_balls);
+          
+          // Process the powerball
+          const powerball = processPowerball(draw.powerball);
+          
+          console.log('Processed white balls:', whiteBalls);
+          console.log('Processed powerball:', powerball);
+          
+          return {
+            ...draw,
+            draw_number: safelyParseNumber(draw.draw_number, 1),
+            white_balls: whiteBalls,
+            powerball: powerball,
+            jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
+            winners: safelyParseNumber(draw.winners, 0)
+          };
+        });
+        
+        setDraws(processedDraws);
+        setTotalDraws(processedDraws.length);
+        
+        // Debug the processed draws
+        console.log('Processed draws total:', processedDraws.length);
+        if (processedDraws.length > 0) {
+          console.log('First processed draw:', processedDraws[0]);
+        }
       } else {
-        // Handle case where response structure is different than expected
-        console.error('Unexpected API response structure:', response);
-        setError('Failed to fetch draws: Unexpected response format');
-        setDraws([]); // Ensure draws is always an array
+        setError('Failed to fetch draws or no draws found');
       }
     } catch (err) {
       console.error('Error fetching draws:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch draws');
-      setDraws([]); // Ensure draws is always an array
     } finally {
       setLoading(false);
     }
@@ -105,34 +153,23 @@ const History = () => {
     }
   };
 
-  // Safely filter draws with null checking
-  const getFilteredDraws = () => {
-    if (!Array.isArray(draws)) {
-      return [];
-    }
+  // Filter draws based on search term and date filter
+  const filteredDraws = draws.filter(draw => {
+    const matchesSearch = searchTerm === '' || 
+      draw.draw_number.toString().includes(searchTerm) ||
+      (isValidArray(draw.white_balls) && draw.white_balls.some((ball: number) => ball.toString().includes(searchTerm))) ||
+      draw.powerball.toString().includes(searchTerm);
     
-    return draws.filter(draw => {
-      const matchesSearch = searchTerm === '' || 
-        draw.draw_number.toString().includes(searchTerm) ||
-        (Array.isArray(draw.white_balls) && draw.white_balls.some(ball => ball?.toString().includes(searchTerm))) ||
-        (draw.powerball && draw.powerball.toString().includes(searchTerm));
-      
-      const matchesDate = dateFilter === '' || draw.draw_date === dateFilter;
-      
-      return matchesSearch && matchesDate;
-    });
-  };
+    const matchesDate = dateFilter === '' || draw.draw_date === dateFilter;
+    
+    return matchesSearch && matchesDate;
+  });
 
-  // Get filtered and paginated draws
-  const filteredDraws = getFilteredDraws();
-  
   // Calculate pagination
-  const paginatedDraws = filteredDraws.slice(
-    (page - 1) * itemsPerPage,
-    page * itemsPerPage
-  );
-  
-  const totalFilteredPages = Math.ceil(filteredDraws.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredDraws.length / itemsPerPage));
+  const startIndex = (page - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedDraws = filteredDraws.slice(startIndex, endIndex);
 
   if (loading) {
     return (
@@ -161,7 +198,10 @@ const History = () => {
     <div className="space-y-6">
       <section className="bg-white rounded-lg shadow-sm p-6">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
+          <div className="flex items-center space-x-2">
+            <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
+            <span className="text-sm text-gray-500">({totalDraws} total draws)</span>
+          </div>
           <div className="flex items-center space-x-4">
             <div className="relative">
               <input
@@ -238,7 +278,7 @@ const History = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
-                          {Array.isArray(draw.white_balls) && draw.white_balls.map((number, idx) => (
+                          {Array.isArray(draw.white_balls) && draw.white_balls.map((number: number, idx: number) => (
                             <NumberBall
                               key={idx}
                               number={number}
@@ -309,23 +349,46 @@ const History = () => {
 
             <div className="mt-6 flex items-center justify-between">
               <div className="text-sm text-gray-500">
-                Showing {Math.min(filteredDraws.length, 1 + (page - 1) * itemsPerPage)} to {Math.min(filteredDraws.length, page * itemsPerPage)} of {filteredDraws.length} results
+                Showing {startIndex + 1} to {Math.min(endIndex, filteredDraws.length)} of {filteredDraws.length} results
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setPage(prev => Math.max(prev - 1, 1))}
-                  disabled={page === 1}
-                  className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage(prev => Math.min(prev + 1, totalFilteredPages))}
-                  disabled={page >= totalFilteredPages}
-                  className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setPage(1)}
+                    disabled={page === 1}
+                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    First
+                  </button>
+                  <button
+                    onClick={() => setPage(prev => Math.max(prev - 1, 1))}
+                    disabled={page === 1}
+                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                </div>
+                
+                <div className="text-sm text-gray-700">
+                  Page {page} of {totalPages || 1}
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setPage(prev => Math.min(prev + 1, totalPages || 1))}
+                    disabled={page >= totalPages}
+                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => setPage(totalPages || 1)}
+                    disabled={page === totalPages || totalPages === 0}
+                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Last
+                  </button>
+                </div>
               </div>
             </div>
           </>

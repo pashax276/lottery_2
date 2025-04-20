@@ -336,10 +336,10 @@ export async function getDueNumbers() {
 /**
  * Get all draws
  */
-export async function getDraws() {
-  logger.info('Getting all draws');
+export async function getDraws(limit: number = 1000, offset: number = 0) {
+  logger.info('Getting all draws', { limit, offset });
   
-  return fetchWithLogging('/api/draws', {
+  return fetchWithLogging(`/api/draws?limit=${limit}&offset=${offset}`, {
     method: 'GET',
     headers: getHeaders(false), // This endpoint doesn't require auth
   });
