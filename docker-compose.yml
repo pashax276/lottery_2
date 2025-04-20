@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   frontend:
     build:
@@ -20,40 +19,28 @@ services:
     build:
       context: .
       target: backend
-    container_name: lottery_2-backend-1
     ports:
       - "5001:5001"
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
       - PORT=5001
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=info
       - SECRET_KEY=powerball_secret_key_change_in_production
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=powerball_admin
       - ADMIN_EMAIL=admin@example.com
       - ENABLE_SCHEDULER=true
     depends_on:
-      db:
-        condition: service_healthy
+      - db
     networks:
       - powerball-network
     volumes:
       - backend-data:/app/data
     restart: unless-stopped
-    command: >
-      bash -c "
-        mkdir -p /app/data/logs &&
-        chmod -R 777 /app/data/logs &&
-        python main.py &
-        sleep 15 &&
-        python register_admin.py
-      "
 
   db:
     image: postgres:14-alpine
-    container_name: lottery_2-db-1
-    hostname: db
     environment:
       - POSTGRES_USER=powerball
       - POSTGRES_PASSWORD=powerball
@@ -64,11 +51,8 @@ services:
       - powerball-network
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./pg_log:/var/log/postgresql
-    command: >
-      postgres -c log_destination=stderr -c logging_collector=on -c log_directory=/var/log/postgresql -c log_filename=postgresql-%Y-%m-%d_%H%M%S.log -c log_statement=all -c log_min_messages=debug1
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U powerball"]
+      test: ["CMD-SHELL", "pg_isready -U powerball -d powerball"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -94,3 +78,4 @@ networks:
 volumes:
   backend-data:
   postgres-data:
+    name: powerball_postgres_data  # Explicitly name the volume

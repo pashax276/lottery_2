@@ -17,6 +17,9 @@ const NumberBall: React.FC<NumberBallProps> = ({
   matched = false,
   sx = {}
 }) => {
+  // Check if number is valid (not undefined, null, NaN, etc.)
+  const isValidNumber = number !== undefined && number !== null && !isNaN(number) && number > 0;
+  
   const baseStyle: React.CSSProperties = {
     width: size,
     height: size,
@@ -32,6 +35,7 @@ const NumberBall: React.FC<NumberBallProps> = ({
   };
 
   const getBackgroundColor = () => {
+    if (!isValidNumber) return '#ccc'; // Gray color for invalid numbers
     if (matched) return '#FFD700';
     if (highlighted) return '#4CAF50';
     return isPowerball ? '#e74c3c' : '#3498db';
@@ -45,7 +49,7 @@ const NumberBall: React.FC<NumberBallProps> = ({
         boxShadow: highlighted ? '0 0 10px rgba(76, 175, 80, 0.5)' : 'none'
       }}
     >
-      {number}
+      {isValidNumber ? number : '?'}
     </div>
   );
 };

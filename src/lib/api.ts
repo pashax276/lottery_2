@@ -195,88 +195,52 @@ export async function addDraw(
 ) {
   logger.info('Adding new draw', { drawNumber, drawDate, whiteBalls, powerball });
   
-  // Validate inputs before sending
-  if (!drawNumber || !drawDate || !whiteBalls || whiteBalls.length !== 5 || !powerball) {
-    const error = 'Invalid draw data provided';
-    logger.error(error, { drawNumber, drawDate, whiteBalls, powerball });
-    throw new Error(error);
-  }
-
-  try {
-    const token = getAuthToken();
-    if (!token) {
-      const error = 'Authentication required to add draws';
-      logger.error(error);
-      throw new Error(error);
+  // Make sure white balls are sorted before sending
+  const sortedWhiteBalls = [...whiteBalls].sort((a, b) => a - b);
+  
+  // Ensure we have proper date format (YYYY-MM-DD)
+  let formattedDate = drawDate;
+  if (!drawDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    // Try to convert MM/DD/YYYY to YYYY-MM-DD
+    const dateParts = drawDate.split('/');
+    if (dateParts.length === 3) {
+      const month = dateParts[0].padStart(2, '0');
+      const day = dateParts[1].padStart(2, '0');
+      const year = dateParts[2].length === 2 ? `20${dateParts[2]}` : dateParts[2];
+      formattedDate = `${year}-${month}-${day}`;
     }
-
-    const url = `${API_URL}/api/draws/add`;
-    logger.info(`Making request to: ${url}`);
-
-    const response = await fetch(url, {
+  }
+  
+  // Add proper error handling
+  try {
+    const response = await fetch(`${API_URL}/api/draws/add`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      headers: getHeaders(),
       body: JSON.stringify({
         draw_number: drawNumber,
-        draw_date: drawDate,
-        white_balls: whiteBalls,
+        draw_date: formattedDate,
+        white_balls: sortedWhiteBalls,
         powerball: powerball,
         jackpot_amount: jackpotAmount,
         winners: winners,
       }),
     });
     
-    // Log raw response for debugging
-    const responseText = await response.text();
-    logger.info(`Raw response: ${responseText}`);
-    
-    // Parse the response as JSON if possible
-    let responseData;
-    try {
-      responseData = JSON.parse(responseText);
-    } catch (e) {
-      logger.error('Failed to parse response as JSON', { text: responseText });
-      throw new Error(`Server response is not valid JSON: ${responseText}`);
-    }
-    
     if (!response.ok) {
-      const errorMessage = responseData?.detail || `Server returned ${response.status}: ${responseText}`;
-      logger.error('Add draw request failed', { status: response.status, error: errorMessage });
-      throw new Error(errorMessage);
-    }
-
-    // Verify that the draw was successfully added
-    if (!responseData.success || !responseData.draw) {
-      const error = 'Server indicated success but no draw data was returned';
-      logger.error(error, responseData);
-      throw new Error(error);
+      const errorText = await response.text();
+      throw new Error(errorText || `Request failed with status ${response.status}`);
     }
     
-    logger.info('Successfully added draw', { 
-      drawNumber, 
-      drawDate, 
-      responseData 
-    });
+    const data = await response.json();
     
-    // Immediately verify the draw was added by fetching it
-    try {
-      const verification = await getDrawByNumber(drawNumber);
-      if (!verification || !verification.draw) {
-        logger.error('Draw verification failed - draw not found after adding', { drawNumber });
-        throw new Error('Draw was not successfully added to the database');
-      }
-      logger.info('Draw verified in database', { drawNumber });
-    } catch (e) {
-      logger.error('Draw verification failed', { drawNumber, error: e });
-      throw new Error('Could not verify draw was added to database');
+    // Verify the response
+    if (!data.success) {
+      throw new Error(data.detail || 'Failed to add draw');
     }
     
-    return responseData;
+    return data;
   } catch (error) {
-    logger.error('Error in addDraw function', error);
+    logger.error('Error adding draw:', error);
     throw error;
   }
 }

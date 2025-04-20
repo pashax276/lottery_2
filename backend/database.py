@@ -320,115 +320,100 @@ class DatabaseConnector:
             return None
     
     def add_draw(self, draw_number: int, draw_date: str, white_balls: List[int], 
-                 powerball: int, jackpot_amount: float = 0, winners: int = 0) -> Optional[Dict[str, Any]]:
-        logger.info(f"Attempting to add draw #{draw_number} with white_balls={white_balls}, powerball={powerball}, date={draw_date}, jackpot_amount={jackpot_amount}, winners={winners}")
-        
-        # Input validation
-        if not isinstance(draw_number, int) or draw_number <= 0:
-            logger.error(f"Invalid draw_number: {draw_number}")
-            return None
-        
-        if not draw_date or not draw_date.strip():
-            logger.error("Draw date is empty")
-            return None
-        
-        try:
-            datetime.strptime(draw_date, '%Y-%m-%d')
-        except ValueError:
-            logger.error(f"Invalid draw_date format: {draw_date} (expected YYYY-MM-DD)")
-            return None
-        
-        if len(white_balls) != 5:
-            logger.error(f"Invalid white balls count: {len(white_balls)} (expected 5)")
-            return None
-        
-        if any(not isinstance(x, int) or x < 1 or x > 69 for x in white_balls):
-            logger.error(f"Invalid white balls values: {white_balls}")
-            return None
-        
-        if len(set(white_balls)) != 5:
-            logger.error(f"Duplicate white balls: {white_balls}")
-            return None
-        
-        if not isinstance(powerball, int) or powerball < 1 or powerball > 26:
-            logger.error(f"Invalid powerball: {powerball}")
-            return None
-        
+                powerball: int, jackpot_amount: float = 0, winners: int = 0) -> Optional[Dict[str, Any]]:
+        """Add a new draw"""
         # Check if draw already exists
-        existing_draw = self.get_draw_by_number(draw_number)
-        if existing_draw:
-            logger.warning(f"Draw #{draw_number} already exists")
+        if self.get_draw_by_number(draw_number):
+            logger.warning(f"Draw {draw_number} already exists")
             return None
         
         try:
-            # Disable autocommit for transaction
-            self.conn.autocommit = False
+            # Make sure we have a database connection
+            if not self.connect():
+                logger.error("Failed to connect to database")
+                return None
+            
+            # Ensure all parameters are valid
+            if len(white_balls) != 5:
+                logger.error(f"Invalid white balls count: {len(white_balls)}")
+                return None
+            
+            # Ensure white balls are within range and unique
+            if not all(1 <= ball <= 69 for ball in white_balls):
+                logger.error(f"White balls out of range: {white_balls}")
+                return None
+            
+            if len(set(white_balls)) != 5:
+                logger.error(f"White balls not unique: {white_balls}")
+                return None
+            
+            # Ensure powerball is within range
+            if not 1 <= powerball <= 26:
+                logger.error(f"Powerball out of range: {powerball}")
+                return None
+            
+            # Insert draw with proper error handling
+            query = """
+            INSERT INTO draws 
+            (draw_number, draw_date, jackpot_amount, winners, source) 
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, draw_number, draw_date, jackpot_amount, winners, source, created_at
+            """
+            
+            result = self.execute(query, (
+                draw_number, draw_date, jackpot_amount, winners, 'user'
+            ))
+            
+            if not result:
+                logger.error(f"Failed to insert draw {draw_number}")
+                return None
+            
+            draw = result[0]
+            
+            # Insert individual numbers
+            number_params = []
+            for i, number in enumerate(white_balls):
+                number_params.append((draw["id"], i+1, number, False))
+            
+            # Insert powerball
+            number_params.append((draw["id"], 6, powerball, True))
+            
+            # Use execute_values for better performance with multiple inserts
+            from psycopg2.extras import execute_values
+            
             with self.conn.cursor() as cursor:
-                # Insert draw
-                query = """
-                INSERT INTO draws 
-                (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners) 
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING *
-                """
-                logger.debug(f"Inserting draw #{draw_number} into draws table")
-                try:
-                    cursor.execute(query, (
-                        draw_number, draw_date, white_balls, powerball, jackpot_amount, winners
-                    ))
-                except Exception as e:
-                    logger.error(f"Failed to insert draw #{draw_number} into draws table: {str(e)}")
-                    self.conn.rollback()
-                    return None
-                
-                result = cursor.fetchall()
-                if not result:
-                    logger.error(f"Failed to insert draw #{draw_number}: No rows returned")
-                    self.conn.rollback()
-                    return None
-                
-                draw = result[0]
-                logger.debug(f"Inserted draw #{draw_number} with id={draw['id']}")
-                
-                # Insert individual numbers
-                for i, num in enumerate(white_balls):
-                    num_query = """
-                    INSERT INTO numbers (draw_id, position, number, is_powerball) 
-                    VALUES (%s, %s, %s, %s)
-                    """
-                    logger.debug(f"Inserting white ball {num} at position {i+1} for draw #{draw_number}")
-                    try:
-                        cursor.execute(num_query, (draw["id"], i+1, num, False))
-                    except Exception as e:
-                        logger.error(f"Failed to insert white ball {num} at position {i+1} for draw #{draw_number}: {str(e)}")
-                        self.conn.rollback()
-                        return None
-                
-                # Insert powerball
-                pb_query = """
-                INSERT INTO numbers (draw_id, position, number, is_powerball) 
-                VALUES (%s, %s, %s, %s)
-                """
-                logger.debug(f"Inserting powerball {powerball} for draw #{draw_number}")
-                try:
-                    cursor.execute(pb_query, (draw["id"], 6, powerball, True))
-                except Exception as e:
-                    logger.error(f"Failed to insert powerball {powerball} for draw #{draw_number}: {str(e)}")
-                    self.conn.rollback()
-                    return None
-                
-                # Commit transaction
-                self.conn.commit()
-                logger.info(f"Successfully added draw #{draw_number}")
-                return draw
-                
+                execute_values(
+                    cursor, 
+                    "INSERT INTO numbers (draw_id, position, number, is_powerball) VALUES %s",
+                    number_params
+                )
+            
+            # Get complete draw with numbers
+            query = """
+            SELECT 
+                d.id, d.draw_number, d.draw_date, d.jackpot_amount, d.winners, d.source, d.created_at,
+                array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
+                (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
+            FROM 
+                draws d
+            JOIN 
+                numbers n ON d.id = n.draw_id
+            WHERE 
+                d.id = %s
+            GROUP BY 
+                d.id
+            """
+            
+            complete_result = self.execute(query, (draw["id"],))
+            
+            return complete_result[0] if complete_result else draw
+            
         except Exception as e:
-            logger.error(f"Unexpected exception while adding draw #{draw_number}: {str(e)}")
-            self.conn.rollback()
+            logger.exception(f"Error in add_draw: {str(e)}")
+            # Make sure we don't leave the transaction in a bad state
+            if self.conn and not self.conn.closed:
+                self.conn.rollback()
             return None
-        
-        finally:
-            self.conn.autocommit = True
     
     def add_prediction(self, white_balls: List[int], powerball: int, 
                       confidence: float, method: str, rationale: str, 
