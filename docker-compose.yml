@@ -24,6 +24,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
+      - DEBUG_NO_FALLBACK=true
       - PORT=5001
       - LOG_LEVEL=info
       - SECRET_KEY=powerball_secret_key_change_in_production

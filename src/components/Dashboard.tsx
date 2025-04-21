@@ -55,9 +55,9 @@ const Dashboard = () => {
           is_array: Array.isArray(sampleDraw.white_balls)
         });
         
-        // Process the draws to ensure data consistency with robust handling
+        // Process the draws to ensure data consistency
         const processedDraws = result.draws.map(draw => {
-          // Process white balls using our robust handler
+          // Process white balls
           const whiteBalls = processWhiteBalls(draw.white_balls);
           
           // Process powerball
@@ -123,25 +123,51 @@ const Dashboard = () => {
     );
   }
 
-  // Prepare stats array
+  // Calculate dynamic trend for Total Draws
+  const calculateTrend = () => {
+    if (latestDraws.length < 2) return 'N/A';
+    
+    // Get draws from the last 7 days and the previous 7 days
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    
+    const recentDraws = latestDraws.filter(draw => new Date(draw.draw_date) >= sevenDaysAgo);
+    const previousDraws = latestDraws.filter(
+      draw => new Date(draw.draw_date) >= fourteenDaysAgo && new Date(draw.draw_date) < sevenDaysAgo
+    );
+    
+    const recentCount = recentDraws.length;
+    const previousCount = previousDraws.length;
+    
+    if (previousCount === 0 && recentCount === 0) return 'N/A';
+    if (previousCount === 0) return recentCount > 0 ? '+100%' : 'N/A';
+    
+    const percentageChange = ((recentCount - previousCount) / previousCount) * 100;
+    return percentageChange >= 0
+      ? `+${percentageChange.toFixed(1)}%`
+      : `${percentageChange.toFixed(1)}%`;
+  };
+
+  // Prepare stats array with dynamic trend
   const stats = [
     { 
       label: 'Total Draws', 
       value: totalDrawCount.toString(), 
       icon: TrendingUp, 
-      trend: '+0%' 
+      trend: calculateTrend()
     },
     { 
       label: 'Winners', 
       value: totalWinners.toString(), 
       icon: Users, 
-      trend: '+0%' 
+      trend: '+0%' // Can be enhanced similarly if winner data changes
     },
     { 
       label: 'Latest Jackpot', 
       value: formatCurrency(latestJackpot), 
       icon: DollarSign, 
-      trend: '+0%' 
+      trend: '+0%' // Can be enhanced if jackpot history is available
     },
   ];
 

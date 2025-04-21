@@ -211,6 +211,13 @@ export async function addDraw(
     }
   }
   
+  // Validate parameters
+  const validation = validateDrawParameters(drawNumber, formattedDate, sortedWhiteBalls, powerball);
+  if (!validation.isValid) {
+    logger.error('Validation failed for addDraw', validation.errors);
+    throw new Error(validation.errors.join('; '));
+  }
+  
   // Add proper error handling
   try {
     const response = await fetch(`${API_URL}/api/draws/add`, {
@@ -228,6 +235,7 @@ export async function addDraw(
     
     if (!response.ok) {
       const errorText = await response.text();
+      logger.error(`Failed to add draw ${drawNumber}`, errorText);
       throw new Error(errorText || `Request failed with status ${response.status}`);
     }
     
@@ -235,9 +243,11 @@ export async function addDraw(
     
     // Verify the response
     if (!data.success) {
+      logger.error(`Failed to add draw ${drawNumber}`, data.detail);
       throw new Error(data.detail || 'Failed to add draw');
     }
     
+    logger.info(`Successfully added draw ${drawNumber}`, data);
     return data;
   } catch (error) {
     logger.error('Error adding draw:', error);
@@ -305,7 +315,7 @@ export async function getFrequencyAnalysis() {
   
   return fetchWithLogging('/api/insights/frequency', {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -317,7 +327,7 @@ export async function getHotNumbers() {
   
   return fetchWithLogging('/api/insights/hot', {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -329,7 +339,7 @@ export async function getDueNumbers() {
   
   return fetchWithLogging('/api/insights/due', {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -341,7 +351,7 @@ export async function getDraws(limit: number = 1000, offset: number = 0) {
   
   return fetchWithLogging(`/api/draws?limit=${limit}&offset=${offset}`, {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -353,7 +363,7 @@ export async function getLatestDraw() {
   
   return fetchWithLogging('/api/draws/latest', {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -365,7 +375,7 @@ export async function getDrawByNumber(drawNumber: number) {
   
   return fetchWithLogging(`/api/draws/${drawNumber}`, {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 
@@ -392,7 +402,7 @@ export async function getPredictions(method: string = 'all') {
   
   return fetchWithLogging(`/api/predictions?method=${method}`, {
     method: 'GET',
-    headers: getHeaders(false), // This endpoint doesn't require auth
+    headers: getHeaders(false),
   });
 }
 

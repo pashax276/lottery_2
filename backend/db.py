@@ -298,7 +298,7 @@ class PostgresDB:
     def add_draw(self, draw_number: int, draw_date: str, white_balls: List[int], 
                  powerball: int, jackpot_amount: float = 0, winners: int = 0,
                  source: str = 'api') -> Optional[Dict[str, Any]]:
-        """Add a new draw"""
+        """Add a new draw with white_balls and powerball properly"""
         # Check if draw already exists
         if self.get_draw_by_number(draw_number):
             logger.warning(f"Draw {draw_number} already exists")
@@ -307,36 +307,19 @@ class PostgresDB:
         # Insert draw
         query = """
         INSERT INTO draws 
-        (draw_number, draw_date, jackpot_amount, winners, source) 
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, draw_number, draw_date, jackpot_amount, winners, source, created_at
+        (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source) 
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
         """
         
         result = self.execute(query, (
-            draw_number, draw_date, jackpot_amount, winners, source
+            draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source
         ))
         
         if not result:
             return None
         
-        draw = result[0]
-        
-        # Insert individual numbers
-        number_params = []
-        for i, number in enumerate(white_balls):
-            number_params.append((draw["id"], i+1, number, False))
-        
-        # Insert powerball
-        number_params.append((draw["id"], 6, powerball, True))
-        
-        numbers_query = """
-        INSERT INTO numbers (draw_id, position, number, is_powerball)
-        VALUES %s
-        """
-        
-        self.execute_many(numbers_query, number_params)
-        
-        return draw
+        return result[0]
     
     # Prediction operations
     def add_prediction(self, white_balls: List[int], powerball: int, 
@@ -369,32 +352,26 @@ class PostgresDB:
         
         numbers_query = """
         INSERT INTO prediction_numbers (prediction_id, position, number, is_powerball)
-        VALUES %s
+        VALUES (%s, %s, %s, %s)
         """
         
-        self.execute_many(numbers_query, number_params)
+        for params in number_params:
+            self.execute(numbers_query, params)
         
         # Update user stats
         self.update_user_stat(user_id, 'predictions_made')
         
-        # Get complete prediction
-        query = """
-        SELECT 
-            p.id, p.user_id, p.method, p.confidence, p.rationale, p.created_at,
-            array_agg(CASE WHEN pn.is_powerball = false THEN pn.number END ORDER BY pn.position) FILTER (WHERE pn.is_powerball = false) AS white_balls,
-            (array_agg(pn.number) FILTER (WHERE pn.is_powerball = true))[1] AS powerball
-        FROM 
-            predictions p
-        JOIN 
-            prediction_numbers pn ON p.id = pn.prediction_id
-        WHERE 
-            p.id = %s
-        GROUP BY 
-            p.id
-        """
-        
-        result = self.execute(query, (pred_id,))
-        return result[0] if result else None
+        # Return complete prediction
+        return {
+            'id': pred_id,
+            'user_id': user_id,
+            'white_balls': white_balls,
+            'powerball': powerball,
+            'method': method,
+            'confidence': confidence,
+            'rationale': rationale,
+            'created_at': datetime.now().isoformat()
+        }
     
     def get_predictions(self, method: Optional[str] = None, 
                       user_id: Optional[int] = None,
@@ -507,19 +484,13 @@ class PostgresDB:
         query = """
         SELECT 
             uc.*, 
-            d.draw_number, d.draw_date,
-            array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
-            (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
+            d.draw_number, d.draw_date, d.white_balls, d.powerball
         FROM 
             user_checks uc
         JOIN 
             draws d ON uc.draw_id = d.id
-        JOIN 
-            numbers n ON d.id = n.draw_id
         WHERE 
             uc.user_id = %s
-        GROUP BY 
-            uc.id, d.draw_number, d.draw_date
         ORDER BY 
             uc.created_at DESC
         LIMIT %s OFFSET %s
@@ -532,18 +503,16 @@ class PostgresDB:
     def get_frequency_analysis(self) -> Dict[str, Dict[str, int]]:
         """Get frequency analysis of numbers"""
         white_query = """
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = FALSE
-        GROUP BY number
+        SELECT unnest(white_balls) as number, COUNT(*) as count
+        FROM draws
+        GROUP BY unnest(white_balls)
         ORDER BY number
         """
         
         powerball_query = """
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = TRUE
-        GROUP BY number
+        SELECT powerball as number, COUNT(*) as count
+        FROM draws
+        GROUP BY powerball
         ORDER BY number
         """
         

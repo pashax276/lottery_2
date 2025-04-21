@@ -11,6 +11,7 @@ import asyncio
 from bs4 import BeautifulSoup
 from fake_useragent import UserAgent
 from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
+from db import get_db
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

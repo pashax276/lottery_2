@@ -1,5 +1,5 @@
 -- Powerball Analyzer Database Schema
--- Create this file at backend/schema.sql
+-- Fixed version with proper order of operations
 
 -- Drop tables if they exist
 DROP TABLE IF EXISTS user_checks CASCADE;
@@ -8,16 +8,16 @@ DROP TABLE IF EXISTS predictions CASCADE;
 DROP TABLE IF EXISTS expected_combinations CASCADE;
 DROP TABLE IF EXISTS numbers CASCADE;
 DROP TABLE IF EXISTS draws CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS user_stats CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS analysis_results CASCADE;
 
--- Create tables
+-- Create tables in proper order
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(100) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE,
-    password_hash TEXT,  -- Add this column for authentication
+    password_hash TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -25,10 +25,14 @@ CREATE TABLE draws (
     id SERIAL PRIMARY KEY,
     draw_number INTEGER UNIQUE NOT NULL,
     draw_date DATE NOT NULL,
+    white_balls INTEGER[] NOT NULL,
+    powerball INTEGER NOT NULL,
     jackpot_amount NUMERIC(15, 2) DEFAULT 0,
     winners INTEGER DEFAULT 0,
     source VARCHAR(50),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT valid_white_balls CHECK (array_length(white_balls, 1) = 5),
+    CONSTRAINT valid_powerball CHECK (powerball >= 1 AND powerball <= 26)
 );
 
 CREATE TABLE numbers (
@@ -112,52 +116,19 @@ CREATE INDEX idx_predictions_user_id ON predictions(user_id);
 CREATE INDEX idx_predictions_method ON predictions(method);
 CREATE INDEX idx_analysis_results_type ON analysis_results(type);
 
--- Create views for common queries
-CREATE VIEW view_latest_draw AS
-SELECT 
-    d.id, d.draw_number, d.draw_date, d.jackpot_amount, d.winners,
-    array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
-    (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
-FROM 
-    draws d
-JOIN 
-    numbers n ON d.id = n.draw_id
-GROUP BY 
-    d.id, d.draw_number
-ORDER BY 
-    d.draw_date DESC, d.draw_number DESC
-LIMIT 1;
-
+-- Create views AFTER tables exist
 CREATE VIEW view_all_draws AS
 SELECT 
-    d.id, d.draw_number, d.draw_date, d.jackpot_amount, d.winners,
-    array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
-    (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
-FROM 
-    draws d
-JOIN 
-    numbers n ON d.id = n.draw_id
-GROUP BY 
-    d.id, d.draw_number
-ORDER BY 
-    d.draw_date DESC, d.draw_number DESC;
+    id, draw_number, draw_date, white_balls, powerball,
+    jackpot_amount, winners, created_at
+FROM draws
+ORDER BY draw_date DESC, draw_number DESC;
 
-CREATE VIEW view_all_predictions AS
-SELECT 
-    p.id, p.user_id, p.method, p.confidence, p.rationale, p.created_at,
-    array_agg(CASE WHEN pn.is_powerball = false THEN pn.number END ORDER BY pn.position) FILTER (WHERE pn.is_powerball = false) AS white_balls,
-    (array_agg(pn.number) FILTER (WHERE pn.is_powerball = true))[1] AS powerball
-FROM 
-    predictions p
-JOIN 
-    prediction_numbers pn ON p.id = pn.prediction_id
-GROUP BY 
-    p.id
-ORDER BY 
-    p.created_at DESC;
+CREATE VIEW view_latest_draw AS
+SELECT * FROM view_all_draws LIMIT 1;
 
 -- Insert a default anonymous user
-INSERT INTO users (id, username, email, password_hash) VALUES 
+INSERT INTO users (id, username, email, password_hash) VALUES
 (1, 'anonymous', 'anonymous@example.com', NULL);
 
 -- Update the sequence
