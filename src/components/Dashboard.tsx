@@ -1,16 +1,10 @@
+// src/components/Dashboard.tsx
+
 import React, { useState, useEffect } from 'react';
 import { ArrowUpRight, TrendingUp, Users, DollarSign, Calendar } from 'lucide-react';
 import { getDraws, getLatestDraw } from '../lib/api';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
-import { showToast } from './Toast';
-import { 
-  safelyParseNumber, 
-  isValidArray, 
-  formatCurrency,
-  processWhiteBalls,
-  processPowerball
-} from '../utils/dataUtils';
 
 interface Draw {
   id: string;
@@ -18,7 +12,7 @@ interface Draw {
   draw_date: string;
   white_balls: number[];
   powerball: number;
-  jackpot_amount: number;
+  jackpot_amount: number | undefined;
   winners: number;
 }
 
@@ -26,10 +20,12 @@ const Dashboard = () => {
   const [latestDraws, setLatestDraws] = useState<Draw[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [totalDrawCount, setTotalDrawCount] = useState(0);
-  const [totalWinners, setTotalWinners] = useState(0);
-  const [latestJackpot, setLatestJackpot] = useState(0);
-  
+  const [stats, setStats] = useState([
+    { label: 'Total Draws', value: '0', icon: TrendingUp, trend: '+0%' },
+    { label: 'Winners', value: '0', icon: Users, trend: '+0%' },
+    { label: 'Latest Jackpot', value: '$0', icon: DollarSign, trend: '+0%' },
+  ]);
+
   useEffect(() => {
     fetchDraws();
   }, []);
@@ -39,62 +35,48 @@ const Dashboard = () => {
     setError(null);
     
     try {
-      const result = await getDraws(1000, 0);
-      
-      console.log('Raw dashboard API response:', result);
+      const result = await getDraws();
       
       if (result && result.draws && result.draws.length > 0) {
-        // Log a sample draw to understand the data structure
-        const sampleDraw = result.draws[0];
-        console.log('Sample draw structure:', {
-          id: sampleDraw.id,
-          draw_number: sampleDraw.draw_number,
-          white_balls: sampleDraw.white_balls,
-          powerball: sampleDraw.powerball,
-          type_white_balls: typeof sampleDraw.white_balls,
-          is_array: Array.isArray(sampleDraw.white_balls)
-        });
-        
-        // Process the draws to ensure data consistency
-        const processedDraws = result.draws.map(draw => {
-          // Process white balls
-          const whiteBalls = processWhiteBalls(draw.white_balls);
-          
-          // Process powerball
-          const powerball = processPowerball(draw.powerball);
-          
-          return {
-            ...draw,
-            draw_number: safelyParseNumber(draw.draw_number, 1),
-            white_balls: whiteBalls,
-            powerball: powerball,
-            jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
-            winners: safelyParseNumber(draw.winners, 0)
-          };
-        });
-        
         // Get latest 8 draws
-        const latestEight = processedDraws.slice(0, 8);
+        const latestEight = result.draws.slice(0, 8);
         setLatestDraws(latestEight);
         
         // Update stats
-        setTotalDrawCount(processedDraws.length);
-        setTotalWinners(processedDraws.filter(draw => draw.winners > 0).length);
+        const totalDraws = result.draws.length;
+        const winners = result.draws.filter(draw => draw.winners > 0).length;
         
-        if (processedDraws[0]?.jackpot_amount) {
-          setLatestJackpot(processedDraws[0].jackpot_amount);
+        // Get the latest jackpot amount
+        const latestJackpot = result.draws[0]?.jackpot_amount || 0;
+        
+        // Format jackpot with appropriate suffix
+        let jackpotDisplay = '$0';
+        if (latestJackpot >= 1_000_000_000) {
+          jackpotDisplay = `$${(latestJackpot / 1_000_000_000).toFixed(1)}B`;
+        } else if (latestJackpot >= 1_000_000) {
+          jackpotDisplay = `$${(latestJackpot / 1_000_000).toFixed(1)}M`;
+        } else if (latestJackpot > 0) {
+          jackpotDisplay = `$${latestJackpot.toLocaleString()}`;
         }
         
-        console.log('Processed dashboard draws:', processedDraws.length);
-        console.log('First processed draw:', latestEight[0]);
-      } else {
-        setLatestDraws([]);
-        setError('No draws found');
+        // Calculate jackpot growth trend
+        let jackpotTrend = '+0%';
+        if (result.draws.length >= 2) {
+          const previousJackpot = result.draws[1]?.jackpot_amount || 0;
+          if (previousJackpot > 0 && latestJackpot > previousJackpot) {
+            const growthPercent = ((latestJackpot - previousJackpot) / previousJackpot) * 100;
+            jackpotTrend = `+${growthPercent.toFixed(0)}%`;
+          }
+        }
+        
+        setStats([
+          { label: 'Total Draws', value: totalDraws.toString(), icon: TrendingUp, trend: '+0%' },
+          { label: 'Winners', value: winners.toString(), icon: Users, trend: '+0%' },
+          { label: 'Latest Jackpot', value: jackpotDisplay, icon: DollarSign, trend: jackpotTrend },
+        ]);
       }
     } catch (err) {
-      console.error('Error fetching draws:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch draws');
-      showToast.error(err instanceof Error ? err.message : 'Failed to fetch draws');
     } finally {
       setLoading(false);
     }
@@ -123,54 +105,6 @@ const Dashboard = () => {
     );
   }
 
-  // Calculate dynamic trend for Total Draws
-  const calculateTrend = () => {
-    if (latestDraws.length < 2) return 'N/A';
-    
-    // Get draws from the last 7 days and the previous 7 days
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
-    
-    const recentDraws = latestDraws.filter(draw => new Date(draw.draw_date) >= sevenDaysAgo);
-    const previousDraws = latestDraws.filter(
-      draw => new Date(draw.draw_date) >= fourteenDaysAgo && new Date(draw.draw_date) < sevenDaysAgo
-    );
-    
-    const recentCount = recentDraws.length;
-    const previousCount = previousDraws.length;
-    
-    if (previousCount === 0 && recentCount === 0) return 'N/A';
-    if (previousCount === 0) return recentCount > 0 ? '+100%' : 'N/A';
-    
-    const percentageChange = ((recentCount - previousCount) / previousCount) * 100;
-    return percentageChange >= 0
-      ? `+${percentageChange.toFixed(1)}%`
-      : `${percentageChange.toFixed(1)}%`;
-  };
-
-  // Prepare stats array with dynamic trend
-  const stats = [
-    { 
-      label: 'Total Draws', 
-      value: totalDrawCount.toString(), 
-      icon: TrendingUp, 
-      trend: calculateTrend()
-    },
-    { 
-      label: 'Winners', 
-      value: totalWinners.toString(), 
-      icon: Users, 
-      trend: '+0%' // Can be enhanced similarly if winner data changes
-    },
-    { 
-      label: 'Latest Jackpot', 
-      value: formatCurrency(latestJackpot), 
-      icon: DollarSign, 
-      trend: '+0%' // Can be enhanced if jackpot history is available
-    },
-  ];
-
   return (
     <div className="space-y-6">
       {/* Latest Draw */}
@@ -178,20 +112,18 @@ const Dashboard = () => {
         <section className="bg-white rounded-lg shadow-sm p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Latest Draw Results</h2>
           <div className="flex items-center space-x-4">
-            {isValidArray(latestDraws[0].white_balls) && latestDraws[0].white_balls.map((number, index) => (
+            {latestDraws[0].white_balls.map((number, index) => (
               <NumberBall
                 key={index}
                 number={number}
                 isPowerball={false}
                 size={40}
-                highlighted={true}
               />
             ))}
             <NumberBall
               number={latestDraws[0].powerball}
               isPowerball={true}
               size={40}
-              highlighted={true}
             />
           </div>
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -207,7 +139,7 @@ const Dashboard = () => {
               <p className="text-sm text-gray-500">Jackpot</p>
               <p className="text-lg font-medium text-gray-900">
                 {latestDraws[0].jackpot_amount 
-                  ? formatCurrency(latestDraws[0].jackpot_amount) 
+                  ? formatJackpot(latestDraws[0].jackpot_amount)
                   : 'N/A'}
               </p>
             </div>
@@ -249,7 +181,7 @@ const Dashboard = () => {
           <h2 className="text-lg font-semibold text-gray-900">Recent Draws</h2>
           <div className="flex items-center space-x-2 text-sm text-blue-600">
             <Calendar className="h-4 w-4" />
-            <span>Last {Math.min(latestDraws.length, 8)} Draws</span>
+            <span>Last 8 Draws</span>
           </div>
         </div>
         
@@ -290,7 +222,7 @@ const Dashboard = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
-                        {isValidArray(draw.white_balls) && draw.white_balls.map((number, idx) => (
+                        {draw.white_balls.map((number, idx) => (
                           <NumberBall
                             key={idx}
                             number={number}
@@ -306,7 +238,7 @@ const Dashboard = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {draw.jackpot_amount ? formatCurrency(draw.jackpot_amount) : 'N/A'}
+                      {draw.jackpot_amount ? formatJackpot(draw.jackpot_amount) : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {draw.winners > 0 ? (
@@ -329,5 +261,16 @@ const Dashboard = () => {
     </div>
   );
 };
+
+// Helper function to format jackpot amount
+function formatJackpot(amount: number): string {
+  if (amount >= 1_000_000_000) {
+    return `$${(amount / 1_000_000_000).toFixed(1)}B`;
+  } else if (amount >= 1_000_000) {
+    return `$${(amount / 1_000_000).toFixed(1)}M`;
+  } else {
+    return `$${amount.toLocaleString()}`;
+  }
+}
 
 export default Dashboard;
