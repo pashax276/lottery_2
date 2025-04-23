@@ -278,10 +278,49 @@ class PostgresDB:
         return self.execute(query, (limit, offset)) or []
     
     def get_draw_by_number(self, draw_number: int) -> Optional[Dict[str, Any]]:
-        """Get a draw by its draw number"""
-        query = "SELECT * FROM draws WHERE draw_number = %s"
+        """Get a draw by its draw number with prize breakdown"""
+        # Get the basic draw information
+        query = """
+        SELECT d.*, 
+            array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
+            (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
+        FROM draws d
+        JOIN numbers n ON d.id = n.draw_id
+        WHERE d.draw_number = %s
+        GROUP BY d.id
+        """
+        
         result = self.execute(query, (draw_number,))
-        return result[0] if result else None
+        
+        if not result:
+            return None
+        
+        draw = result[0]
+        
+        # Check if the prize_breakdowns table exists
+        check_table_query = """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables 
+            WHERE table_name = 'prize_breakdowns'
+        )
+        """
+        
+        table_exists_result = self.execute(check_table_query)
+        if table_exists_result and table_exists_result[0]['exists']:
+            # Get prize breakdown
+            prize_query = """
+            SELECT tier, winners, prize
+            FROM prize_breakdowns
+            WHERE draw_id = %s
+            ORDER BY id
+            """
+            
+            prize_result = self.execute(prize_query, (draw['id'],))
+            
+            if prize_result:
+                draw['prize_breakdown'] = prize_result
+        
+        return draw
     
     def get_draw_by_date(self, draw_date: str) -> Optional[Dict[str, Any]]:
         """Get a draw by its date"""

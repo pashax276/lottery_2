@@ -209,11 +209,11 @@ def init_auth_schema() -> None:
         ))
         logger.info(f"Created admin user: {admin_username}")
 
-def get_optional_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
+async def get_optional_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
     """Get the current user if authenticated, or None"""
     try:
         if token:
-            return get_current_user(token)
+            return await get_current_user(token)
         return None
     except HTTPException:
         return None

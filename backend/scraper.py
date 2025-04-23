@@ -1,3 +1,4 @@
+# backend/scraper.py
 import asyncio
 import httpx
 import logging
@@ -17,25 +18,18 @@ logger = logging.getLogger("powerball-scraper")
 class PowerballScraper:
     """
     Scraper for Powerball results from official sources
-    Prioritizes CalLottery for draw numbers and fallbacks to Powerball.com
+    Prioritizes CalLottery for draw numbers and falls back to Powerball.com
     """
     
     def __init__(self):
         """Initialize the Powerball scraper"""
         self.user_agent = UserAgent()
-        # Updated California Lottery API for Powerball (game ID 12)
         self.ca_api_url = "https://www.calottery.com/api/DrawGameApi/DrawGamePastDrawResults/12/1/20"
-        # Backup URL for web scraping
         self.ca_web_url = "https://www.calottery.com/draw-games/powerball"
-        # Official Powerball website
         self.powerball_url = "https://www.powerball.com"
-        # Powerball previous results page
         self.powerball_history_url = "https://www.powerball.com/previous-results"
-        
-        # Store the latest known draw number for incrementing
         self.latest_draw_number = 0
-        
-        logger.info(f"Powerball scraper initialized")
+        logger.info("Powerball scraper initialized")
     
     async def fetch_latest_draw(self) -> Dict[str, Any]:
         """
@@ -46,7 +40,6 @@ class PowerballScraper:
         """
         logger.info("Fetching latest Powerball draw...")
         
-        # Try CalLottery API first for the draw number
         try:
             draw = await self._fetch_from_ca_api()
             if draw:
@@ -55,7 +48,6 @@ class PowerballScraper:
         except Exception as e:
             logger.error(f"Error fetching from CalLottery API: {str(e)}")
         
-        # Try CalLottery website
         try:
             draw = await self._fetch_from_ca_web()
             if draw:
@@ -64,29 +56,26 @@ class PowerballScraper:
         except Exception as e:
             logger.error(f"Error fetching from CalLottery web: {str(e)}")
         
-        # Fall back to Powerball.com
         try:
-            # Try to get from Powerball.com main page
             draw = await self._fetch_from_powerball_main()
             if draw:
-                # If we have a previous draw number, assign the next number
                 if self.latest_draw_number > 0:
                     draw['draw_number'] = self.latest_draw_number + 1
                 self.latest_draw_number = max(self.latest_draw_number, draw.get('draw_number', 0))
                 return draw
-                
-            # If that fails, try the history page
+        except Exception as e:
+            logger.error(f"Error fetching from Powerball.com main: {str(e)}")
+        
+        try:
             draw = await self._fetch_from_powerball_history()
             if draw:
-                # If we have a previous draw number, assign the next number
-                if self.latest_draw_number > 0 and draw.get('draw_number', 0) == 0:
+                if self.latest_draw_number > 0:
                     draw['draw_number'] = self.latest_draw_number + 1
                 self.latest_draw_number = max(self.latest_draw_number, draw.get('draw_number', 0))
                 return draw
         except Exception as e:
-            logger.error(f"Error fetching from Powerball site: {str(e)}")
+            logger.error(f"Error fetching from Powerball.com history: {str(e)}")
         
-        # Fall back to mock data as a last resort
         logger.warning("All fetch methods failed, generating mock data")
         mock_draw = self._generate_mock_draw()
         if self.latest_draw_number > 0:
@@ -96,7 +85,7 @@ class PowerballScraper:
     
     async def fetch_historical_draws(self, count: int = 20) -> List[Dict[str, Any]]:
         """
-        Fetch historical Powerball draws
+        Fetch historical Powerball draws, starting with CalLottery then switching to Powerball.com
         
         Args:
             count: Number of historical draws to fetch
@@ -105,40 +94,38 @@ class PowerballScraper:
             list: The historical draw data
         """
         logger.info(f"Fetching {count} historical Powerball draws...")
+        all_draws = []
         
-        # Try CalLottery API first
         try:
-            draws = await self._fetch_historical_from_ca_api(count)
-            if draws:
-                # Update latest draw number
-                for draw in draws:
-                    self.latest_draw_number = max(self.latest_draw_number, draw.get('draw_number', 0))
-                return draws
+            ca_draws = await self._fetch_historical_from_ca_api(max_count=118)
+            if ca_draws:
+                all_draws.extend(ca_draws)
+                self.latest_draw_number = max(self.latest_draw_number, max(d.get('draw_number', 0) for d in ca_draws))
+                logger.info(f"Fetched {len(ca_draws)} draws from CalLottery")
         except Exception as e:
-            logger.error(f"Error fetching historical draws from CA API: {str(e)}")
+            logger.error(f"Error fetching historical draws from CalLottery API: {str(e)}")
         
-        # Try Powerball.com as backup
-        try:
-            draw = await self.fetch_latest_draw()  # Get at least the latest draw
-            if draw and draw.get('source') != 'mock_data':
-                return [draw]
-        except Exception as e:
-            logger.error(f"Error fetching latest draw for historical: {str(e)}")
+        remaining_count = count - len(all_draws)
+        if remaining_count > 0:
+            try:
+                pb_draws = await self._fetch_historical_from_powerball(remaining_count)
+                for i, draw in enumerate(pb_draws):
+                    draw['draw_number'] = self.latest_draw_number - len(all_draws) - i
+                all_draws.extend(pb_draws)
+                self.latest_draw_number = max(self.latest_draw_number, max(d.get('draw_number', 0) for d in pb_draws))
+                logger.info(f"Fetched {len(pb_draws)} additional draws from Powerball.com")
+            except Exception as e:
+                logger.error(f"Error fetching historical draws from Powerball.com: {str(e)}")
         
-        # Fall back to mock data
-        logger.warning("Historical fetch methods failed, generating mock data")
-        mock_draws = self._generate_mock_historical_draws(count)
-        
-        # If we have a latest draw number, assign sequential numbers to mock draws
-        if self.latest_draw_number > 0:
+        if len(all_draws) < count:
+            logger.warning(f"Only fetched {len(all_draws)} draws, generating mock data for {count - len(all_draws)} more")
+            mock_draws = self._generate_mock_historical_draws(count - len(all_draws))
             for i, draw in enumerate(mock_draws):
-                draw['draw_number'] = self.latest_draw_number - i
+                draw['draw_number'] = self.latest_draw_number - len(all_draws) - i
+            all_draws.extend(mock_draws)
+            self.latest_draw_number = max(self.latest_draw_number, max(d.get('draw_number', 0) for d in mock_draws))
         
-        # Update latest draw number
-        for draw in mock_draws:
-            self.latest_draw_number = max(self.latest_draw_number, draw.get('draw_number', 0))
-            
-        return mock_draws
+        return all_draws[:count]
     
     @retry(
         stop=stop_after_attempt(3),
@@ -146,7 +133,7 @@ class PowerballScraper:
         retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException))
     )
     async def _fetch_from_ca_api(self) -> Optional[Dict[str, Any]]:
-        """Fetch the latest draw from the updated California Lottery API"""
+        """Fetch the latest draw from the California Lottery API"""
         headers = {
             'User-Agent': self.user_agent.random,
             'Accept': 'application/json',
@@ -163,42 +150,26 @@ class PowerballScraper:
                 logger.warning("No results found in CA API response")
                 return None
             
-            # Parse the first result (latest draw)
-            latest = data['PreviousDraws'][0]  # Get the first draw
+            latest = data['PreviousDraws'][0]
             return self._parse_ca_api_draw(latest)
     
     def _parse_ca_api_draw(self, draw_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Parse draw data from the updated California Lottery API"""
+        """Parse draw data from the California Lottery API"""
         try:
-            # Extract draw number
             draw_number = int(draw_data['DrawNumber'])
+            draw_date = draw_data['DrawDate'].split('T')[0]
             
-            # Parse draw date (format: YYYY-MM-DDThh:mm:ss)
-            draw_date = draw_data['DrawDate']
-            if 'T' in draw_date:
-                draw_date = draw_date.split('T')[0]  # Extract just the date part
-            elif '/' in draw_date:
-                month, day, year = draw_date.split('/')
-                draw_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-            
-            # Parse the winning numbers
             white_balls = []
             powerball = 0
-            
-            # WinningNumbers is a dictionary with string keys
             for i in range(5):
                 white_balls.append(int(draw_data['WinningNumbers'][str(i)]['Number']))
-            # Get powerball (usually at index 5)
             powerball = int(draw_data['WinningNumbers']['5']['Number'])
             
-            # Parse jackpot and winners info from prizes
             jackpot_amount = 0
             winners = 0
             prize_breakdown = []
             
-            # Process prize information
             if 'Prizes' in draw_data and isinstance(draw_data['Prizes'], dict):
-                # Create prize breakdown details
                 prize_tiers = [
                     {"name": "5 + Powerball", "key": "1"},
                     {"name": "5", "key": "2"},
@@ -220,7 +191,6 @@ class PowerballScraper:
                             "prize": prize_info.get("Amount", "$0")
                         })
                         
-                        # Set jackpot amount from the first tier
                         if tier["key"] == "1" and "Amount" in prize_info:
                             try:
                                 jackpot_str = str(prize_info["Amount"]).replace("$", "").replace(",", "")
@@ -228,17 +198,13 @@ class PowerballScraper:
                             except ValueError:
                                 pass
                         
-                        # Set winners count from the first tier
                         if tier["key"] == "1" and "Count" in prize_info:
                             try:
                                 winners = int(prize_info["Count"])
                             except ValueError:
                                 pass
             
-            # Calculate total winning tickets
-            total_winners = 0
-            for prize in prize_breakdown:
-                total_winners += int(prize["winners"])
+            total_winners = sum(int(prize["winners"]) for prize in prize_breakdown)
                 
             return {
                 'draw_number': draw_number,
@@ -255,7 +221,7 @@ class PowerballScraper:
         except Exception as e:
             logger.error(f"Error parsing CA API draw: {str(e)}")
             return None
-        
+    
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_fixed(2),
@@ -276,41 +242,33 @@ class PowerballScraper:
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find the latest draw section
             draw_section = soup.select_one('.draw-cards .draw-card')
             if not draw_section:
                 logger.warning("Could not find draw section in CalLottery web page")
                 return None
             
-            # Extract draw date
             date_element = draw_section.select_one('.draw-card--header time')
             draw_date = date_element.text.strip() if date_element else "Unknown Date"
             
-            # Format date if needed (e.g., "Saturday, April 6, 2025" -> "2025-04-06")
             try:
                 date_obj = datetime.strptime(draw_date, "%A, %B %d, %Y")
                 draw_date = date_obj.strftime("%Y-%m-%d")
             except ValueError:
-                # Keep original format if parsing fails
                 pass
             
-            # Extract draw number
             draw_number_element = draw_section.select_one('.draw-card--header .draw-card--draw-number')
             draw_number_text = draw_number_element.text.strip() if draw_number_element else ""
             draw_number = 0
             
-            # Extract draw number using regex or string manipulation
             match = re.search(r'(\d+)', draw_number_text)
             if match:
                 draw_number = int(match.group(1))
             
-            # Extract winning numbers
             number_elements = draw_section.select('.winning-number')
             white_balls = []
             powerball = 0
             
             if number_elements:
-                # Last number is usually the Powerball
                 for i, elem in enumerate(number_elements):
                     num = int(elem.text.strip())
                     if i < len(number_elements) - 1:
@@ -318,17 +276,12 @@ class PowerballScraper:
                     else:
                         powerball = num
             
-            # Extract jackpot amount
             jackpot_element = draw_section.select_one('.draw-card--prize-amount')
             jackpot_text = jackpot_element.text.strip() if jackpot_element else "$0"
             
-            # Parse jackpot amount
             jackpot_amount = 0
             try:
-                # Remove $ and commas
                 jackpot_text = jackpot_text.replace('$', '').replace(',', '')
-                
-                # Handle "Million" and "Billion"
                 if 'Million' in jackpot_text:
                     jackpot_text = jackpot_text.replace('Million', '').strip()
                     jackpot_amount = float(jackpot_text) * 1_000_000
@@ -340,20 +293,16 @@ class PowerballScraper:
             except (ValueError, TypeError):
                 jackpot_amount = 0
             
-            # Extract winner information
             winners_element = draw_section.select_one('.has-winners')
             winners = 0
             if winners_element:
-                # Try to extract number of winners
                 match = re.search(r'(\d+)\s+winner', winners_element.text.lower())
                 if match:
                     winners = int(match.group(1))
                 else:
-                    # If it just says "Winner" or similar, assume 1
                     if 'winner' in winners_element.text.lower():
                         winners = 1
             
-            # Construct result
             if len(white_balls) == 5 and powerball > 0:
                 return {
                     'draw_number': draw_number,
@@ -372,27 +321,28 @@ class PowerballScraper:
         wait=wait_fixed(2),
         retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException))
     )
-    async def _fetch_historical_from_ca_api(self, count: int) -> List[Dict[str, Any]]:
-        """Fetch historical draws from the updated California Lottery API"""
+    async def _fetch_historical_from_ca_api(self, max_count: int) -> List[Dict[str, Any]]:
+        """Fetch historical draws from the California Lottery API"""
         headers = {
             'User-Agent': self.user_agent.random,
             'Accept': 'application/json',
             'Referer': 'https://www.calottery.com/draw-games/powerball'
         }
         
-        # Calculate number of pages needed (20 results per page)
-        pages = (count + 19) // 20
         all_draws = []
+        page = 1
+        max_pages = (max_count + 19) // 20
         
-        logger.info(f"Requesting historical draws from CalLottery API")
+        logger.info(f"Requesting historical draws from CalLottery API (max {max_count} draws)")
         async with httpx.AsyncClient(timeout=15.0) as client:
-            for page in range(1, pages + 1):
+            while page <= max_pages and len(all_draws) < max_count:
                 url = f"https://www.calottery.com/api/DrawGameApi/DrawGamePastDrawResults/12/{page}/20"
                 response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 
                 if not data or 'PreviousDraws' not in data or not data['PreviousDraws']:
+                    logger.info(f"No more draws available after page {page}")
                     break
                 
                 draws = []
@@ -402,14 +352,89 @@ class PowerballScraper:
                         draws.append(draw)
                 
                 all_draws.extend(draws)
+                logger.info(f"Fetched {len(draws)} draws from CalLottery page {page}")
                 
-                # Add delay between requests
+                page += 1
                 await asyncio.sleep(random.uniform(1.0, 2.0))
-                
-                if len(all_draws) >= count:
-                    break
             
-            return all_draws[:count]
+            return all_draws[:max_count]
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_fixed(2),
+        retry=retry_if_exception_type((httpx.HTTPError, httpx.TimeoutException))
+    )
+    async def _fetch_historical_from_powerball(self, count: int) -> List[Dict[str, Any]]:
+        """Fetch historical draws from Powerball.com"""
+        headers = {
+            'User-Agent': self.user_agent.random,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        
+        logger.info(f"Requesting historical draws from Powerball.com history: {self.powerball_history_url}")
+        all_draws = []
+        
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            response = await client.get(self.powerball_history_url, headers=headers)
+            response.raise_for_status()
+            
+            html = response.text
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            draw_elements = soup.select('.draw-result')
+            for draw_elem in draw_elements[:count]:
+                try:
+                    date_elem = draw_elem.select_one('.draw-date')
+                    date_str = date_elem.text.strip() if date_elem else ""
+                    try:
+                        date_obj = datetime.strptime(date_str, "%B %d, %Y")
+                        draw_date = date_obj.strftime("%Y-%m-%d")
+                    except ValueError:
+                        draw_date = datetime.now().strftime("%Y-%m-%d")
+                    
+                    number_elems = draw_elem.select('.number')
+                    white_balls = []
+                    powerball = 0
+                    if len(number_elems) >= 6:
+                        white_balls = [int(num.text.strip()) for num in number_elems[:5]]
+                        powerball = int(number_elems[5].text.strip())
+                    
+                    jackpot_elem = draw_elem.select_one('.jackpot-amount')
+                    jackpot_amount = 0
+                    if jackpot_elem:
+                        jackpot_text = jackpot_elem.text.strip().replace('$', '').replace(',', '')
+                        if 'Million' in jackpot_text:
+                            jackpot_text = jackpot_text.replace('Million', '').strip()
+                            jackpot_amount = float(jackpot_text) * 1_000_000
+                        elif 'Billion' in jackpot_text:
+                            jackpot_text = jackpot_text.replace('Billion', '').strip()
+                            jackpot_amount = float(jackpot_text) * 1_000_000_000
+                        else:
+                            jackpot_amount = float(jackpot_text)
+                    
+                    winners = 0
+                    winner_elem = draw_elem.select_one('.winner-info')
+                    if winner_elem and 'winner' in winner_elem.text.lower():
+                        winners = 1
+                    
+                    if len(white_balls) == 5 and powerball > 0:
+                        draw = {
+                            'draw_number': 0,  # Will be set by caller
+                            'draw_date': draw_date,
+                            'white_balls': white_balls,
+                            'powerball': powerball,
+                            'jackpot_amount': jackpot_amount,
+                            'winners': winners,
+                            'source': 'powerball.com'
+                        }
+                        all_draws.append(draw)
+                
+                except Exception as e:
+                    logger.warning(f"Error parsing Powerball.com draw: {str(e)}")
+                    continue
+            
+            return all_draws
     
     @retry(
         stop=stop_after_attempt(3),
@@ -430,113 +455,54 @@ class PowerballScraper:
             response.raise_for_status()
             
             html = response.text
-            logger.info(f"Received HTML response of length: {len(html)}")
+            soup = BeautifulSoup(html, 'html.parser')
             
-            # Try to extract using regex patterns
-            date_pattern = r'(?:draw date|draw was).*?([A-Za-z]+\s+\d{1,2},?\s+\d{4})'
-            date_match = re.search(date_pattern, html, re.IGNORECASE)
-            
-            draw_num_pattern = r'(?:draw number|draw #).*?(\d+)'
-            draw_num_match = re.search(draw_num_pattern, html, re.IGNORECASE)
-            
-            # Look for 5 numbers followed by a powerball number
-            numbers_pattern = r'(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(?:powerball|power\s*ball).*?(\d{1,2})'
-            numbers_match = re.search(numbers_pattern, html, re.IGNORECASE | re.DOTALL)
-            
-            # Extract date
-            draw_date = datetime.now().strftime("%Y-%m-%d")  # Default to today
-            if date_match:
-                date_str = date_match.group(1)
+            date_elem = soup.select_one('.draw-date')
+            draw_date = datetime.now().strftime("%Y-%m-%d")
+            if date_elem:
+                date_str = date_elem.text.strip()
                 try:
-                    # Try to parse with various formats
-                    for fmt in ["%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"]:
-                        try:
-                            draw_date = datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-                            break
-                        except ValueError:
-                            continue
-                except Exception as e:
-                    logger.warning(f"Could not parse date '{date_str}': {e}")
-            
-            # Extract draw number
-            draw_number = 0
-            if draw_num_match:
-                try:
-                    draw_number = int(draw_num_match.group(1))
+                    date_obj = datetime.strptime(date_str, "%B %d, %Y")
+                    draw_date = date_obj.strftime("%Y-%m-%d")
                 except ValueError:
-                    logger.warning(f"Could not parse draw number: {draw_num_match.group(1)}")
+                    pass
             
-            # Extract numbers
+            number_elems = soup.select('.number')
             white_balls = []
             powerball = 0
-            if numbers_match:
+            if len(number_elems) >= 6:
                 try:
-                    white_balls = [int(numbers_match.group(i)) for i in range(1, 6)]
-                    powerball = int(numbers_match.group(6))
+                    white_balls = [int(num.text.strip()) for num in number_elems[:5]]
+                    powerball = int(number_elems[5].text.strip())
                 except ValueError:
-                    logger.warning("Could not parse numbers")
+                    logger.warning("Could not parse numbers from Powerball.com main")
             
-            # If no regex match, try to find numbers using BeautifulSoup
-            if not white_balls or not powerball:
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Look for number elements
-                number_elements = soup.select('.number, .draw-number, .ball, div.number, span.number')
-                if len(number_elements) >= 6:
-                    try:
-                        white_balls = [int(number_elements[i].text.strip()) for i in range(5)]
-                        powerball = int(number_elements[5].text.strip())
-                    except (ValueError, IndexError):
-                        logger.warning("Could not parse number elements")
-            
-            # As a last resort, just look for any 6 numbers in sequence
-            if not white_balls or not powerball:
-                all_numbers = re.findall(r'\b\d{1,2}\b', html)
-                if len(all_numbers) >= 6:
-                    # Try to find clusters of 6 numbers (5 white + 1 power)
-                    for i in range(len(all_numbers) - 5):
-                        potential_balls = [int(all_numbers[i+j]) for j in range(6)]
-                        if all(1 <= ball <= 69 for ball in potential_balls[:5]) and 1 <= potential_balls[5] <= 26:
-                            white_balls = potential_balls[:5]
-                            powerball = potential_balls[5]
-                            break
-            
-            # Try to extract jackpot amount
             jackpot_amount = 0
-            jackpot_pattern = r'\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:Million|Billion)?'
-            jackpot_match = re.search(jackpot_pattern, html, re.IGNORECASE)
-            
-            if jackpot_match:
+            jackpot_elem = soup.select_one('.jackpot-amount')
+            if jackpot_elem:
+                jackpot_text = jackpot_elem.text.strip().replace('$', '').replace(',', '')
                 try:
-                    jackpot_text = jackpot_match.group(0)
-                    # Remove $ and commas
-                    jackpot_text = jackpot_text.replace('$', '').replace(',', '')
-                    
-                    # Handle "Million" and "Billion"
-                    if 'Million' in jackpot_text or 'million' in jackpot_text:
-                        jackpot_text = re.sub(r'[Mm]illion', '', jackpot_text).strip()
+                    if 'Million' in jackpot_text:
+                        jackpot_text = jackpot_text.replace('Million', '').strip()
                         jackpot_amount = float(jackpot_text) * 1_000_000
-                    elif 'Billion' in jackpot_text or 'billion' in jackpot_text:
-                        jackpot_text = re.sub(r'[Bb]illion', '', jackpot_text).strip()
+                    elif 'Billion' in jackpot_text:
+                        jackpot_text = jackpot_text.replace('Billion', '').strip()
                         jackpot_amount = float(jackpot_text) * 1_000_000_000
                     else:
                         jackpot_amount = float(jackpot_text)
-                except (ValueError, TypeError):
-                    jackpot_amount = 0
+                except ValueError:
+                    pass
             
-            # If we have the numbers, construct a result
             if len(white_balls) == 5 and powerball > 0:
-                result = {
-                    'draw_number': draw_number,
+                return {
+                    'draw_number': 0,
                     'draw_date': draw_date,
                     'white_balls': white_balls,
                     'powerball': powerball,
                     'jackpot_amount': jackpot_amount,
-                    'winners': 0,  # Hard to extract from main page
+                    'winners': 0,
                     'source': 'powerball.com'
                 }
-                logger.info(f"Successfully extracted draw from Powerball.com: {white_balls} / {powerball}")
-                return result
             
             return None
     
@@ -559,93 +525,77 @@ class PowerballScraper:
             response.raise_for_status()
             
             html = response.text
-            logger.info(f"Received history HTML of length: {len(html)}")
+            soup = BeautifulSoup(html, 'html.parser')
             
-            # Use regex for a broad pattern match
-            draw_pattern = r'([A-Za-z]+\s+\d{1,2},?\s+\d{4}).*?#?(\d+)?.*?(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(\d{1,2}).*?(?:powerball|power\s*ball|pb).*?(\d{1,2})'
-            match = re.search(draw_pattern, html, re.IGNORECASE | re.DOTALL)
+            draw_elem = soup.select_one('.draw-result')
+            if not draw_elem:
+                logger.warning("No draw results found on Powerball.com history page")
+                return None
             
-            if match:
-                # Extract date
-                date_str = match.group(1)
+            date_elem = draw_elem.select_one('.draw-date')
+            draw_date = datetime.now().strftime("%Y-%m-%d")
+            if date_elem:
+                date_str = date_elem.text.strip()
                 try:
-                    for fmt in ["%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"]:
-                        try:
-                            draw_date = datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-                            break
-                        except ValueError:
-                            continue
-                except Exception:
-                    draw_date = datetime.now().strftime("%Y-%m-%d")
-                
-                # Extract draw number
-                draw_number = 0
-                if match.group(2):
-                    try:
-                        draw_number = int(match.group(2))
-                    except ValueError:
-                        pass
-                
-                # Extract numbers
+                    date_obj = datetime.strptime(date_str, "%B %d, %Y")
+                    draw_date = date_obj.strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+            
+            number_elems = draw_elem.select('.number')
+            white_balls = []
+            powerball = 0
+            if len(number_elems) >= 6:
                 try:
-                    white_balls = [int(match.group(i)) for i in range(3, 8)]
-                    powerball = int(match.group(8))
-                    
-                    # Try to extract jackpot amount
-                    jackpot_amount = 0
-                    jackpot_pattern = r'\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:Million|Billion)?'
-                    jackpot_match = re.search(jackpot_pattern, html, re.IGNORECASE)
-                    
-                    if jackpot_match:
-                        try:
-                            jackpot_text = jackpot_match.group(0)
-                            # Remove $ and commas
-                            jackpot_text = jackpot_text.replace('$', '').replace(',', '')
-                            
-                            # Handle "Million" and "Billion"
-                            if 'Million' in jackpot_text or 'million' in jackpot_text:
-                                jackpot_text = re.sub(r'[Mm]illion', '', jackpot_text).strip()
-                                jackpot_amount = float(jackpot_text) * 1_000_000
-                            elif 'Billion' in jackpot_text or 'billion' in jackpot_text:
-                                jackpot_text = re.sub(r'[Bb]illion', '', jackpot_text).strip()
-                                jackpot_amount = float(jackpot_text) * 1_000_000_000
-                            else:
-                                jackpot_amount = float(jackpot_text)
-                        except (ValueError, TypeError):
-                            jackpot_amount = 0
-                    
-                    result = {
-                        'draw_number': draw_number,
-                        'draw_date': draw_date,
-                        'white_balls': white_balls,
-                        'powerball': powerball,
-                        'jackpot_amount': jackpot_amount,
-                        'winners': 0, # Hard to extract reliably
-                        'source': 'powerball.com'
-                    }
-                    logger.info(f"Successfully extracted draw from history: {white_balls} / {powerball}")
-                    return result
-                except (ValueError, IndexError):
-                    logger.warning("Could not extract numbers from history page")
+                    white_balls = [int(num.text.strip()) for num in number_elems[:5]]
+                    powerball = int(number_elems[5].text.strip())
+                except ValueError:
+                    logger.warning("Could not parse numbers from Powerball.com history")
+                    return None
+            
+            jackpot_amount = 0
+            jackpot_elem = draw_elem.select_one('.jackpot-amount')
+            if jackpot_elem:
+                jackpot_text = jackpot_elem.text.strip().replace('$', '').replace(',', '')
+                try:
+                    if 'Million' in jackpot_text:
+                        jackpot_text = jackpot_text.replace('Million', '').strip()
+                        jackpot_amount = float(jackpot_text) * 1_000_000
+                    elif 'Billion' in jackpot_text:
+                        jackpot_text = jackpot_text.replace('Billion', '').strip()
+                        jackpot_amount = float(jackpot_text) * 1_000_000_000
+                    else:
+                        jackpot_amount = float(jackpot_text)
+                except ValueError:
+                    pass
+            
+            winners = 0
+            winner_elem = draw_elem.select_one('.winner-info')
+            if winner_elem and 'winner' in winner_elem.text.lower():
+                winners = 1
+            
+            if len(white_balls) == 5 and powerball > 0:
+                return {
+                    'draw_number': 0,
+                    'draw_date': draw_date,
+                    'white_balls': white_balls,
+                    'powerball': powerball,
+                    'jackpot_amount': jackpot_amount,
+                    'winners': winners,
+                    'source': 'powerball.com'
+                }
             
             return None
     
     def _generate_mock_draw(self) -> Dict[str, Any]:
         """Generate a mock draw for testing or when all fetch methods fail"""
-        # Get the current date
         today = datetime.now()
         draw_date = today.strftime("%Y-%m-%d")
         
-        # Generate a random draw number if we don't have a latest one
         draw_number = (self.latest_draw_number + 1) if self.latest_draw_number > 0 else random.randint(1000, 2000)
         
-        # Generate 5 unique random white balls (1-69)
         white_balls = sorted(random.sample(range(1, 70), 5))
-        
-        # Generate random powerball (1-26)
         powerball = random.randint(1, 26)
-        
-        # Generate random jackpot amount (typical range)
         jackpot_amount = random.randint(50, 500) * 1_000_000
         
         return {
@@ -661,52 +611,20 @@ class PowerballScraper:
     def _generate_mock_historical_draws(self, count: int) -> List[Dict[str, Any]]:
         """Generate mock historical draws for testing"""
         draws = []
-        
-        # Start from today and go backward
         today = datetime.now()
-        
-        # Use latest known draw number if available
         start_draw_number = self.latest_draw_number if self.latest_draw_number > 0 else 2000
         
         for i in range(count):
-            # Generate draw date (every 3-4 days backwards)
             days_back = i * random.randint(3, 4)
             draw_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
-            
-            # Generate draw number (descending)
             draw_number = start_draw_number - i
-            
-            # Generate 5 unique random white balls (1-69)
             white_balls = sorted(random.sample(range(1, 70), 5))
-            
-            # Generate random powerball (1-26)
             powerball = random.randint(1, 26)
-            
-            # Generate random jackpot amount (growing as we go further back in time)
             base_amount = random.randint(20, 50) * 1_000_000
-            growth_factor = 1 + (i * 0.05)  # 5% increase per draw
+            growth_factor = 1 + (i * 0.05)
             jackpot_amount = int(base_amount * growth_factor)
-            
-            # Occasionally have a winner
             winners = random.choices([0, 1, 2], weights=[0.9, 0.09, 0.01])[0]
             if winners > 0:
-                # Reset jackpot after a win
-                jackpot_amount = random.randint(20, 40) * 1
-# Generate 5 unique random white balls (1-69)
-            white_balls = sorted(random.sample(range(1, 70), 5))
-            
-            # Generate random powerball (1-26)
-            powerball = random.randint(1, 26)
-            
-            # Generate random jackpot amount (growing as we go further back in time)
-            base_amount = random.randint(20, 50) * 1_000_000
-            growth_factor = 1 + (i * 0.05)  # 5% increase per draw
-            jackpot_amount = int(base_amount * growth_factor)
-            
-            # Occasionally have a winner
-            winners = random.choices([0, 1, 2], weights=[0.9, 0.09, 0.01])[0]
-            if winners > 0:
-                # Reset jackpot after a win
                 jackpot_amount = random.randint(20, 40) * 1_000_000
             
             draws.append({
@@ -720,33 +638,129 @@ class PowerballScraper:
             })
         
         return draws
-    
+
     async def enhance_draw_with_details(self, draw: Dict[str, Any]) -> Dict[str, Any]:
         """
         Enhance a draw with additional details from Powerball.com
-        Used when we have basic draw info from CalLottery but want prize breakdowns
         """
-        # If this is already complete, return as is
         if draw.get('jackpot_amount', 0) > 0 and draw.get('source') != 'mock_data':
             return draw
             
         try:
-            # Try to get detailed draw info from Powerball.com
             pb_draw = await self._fetch_from_powerball_main()
             
-            if pb_draw:
-                # Check if the numbers match
-                if sorted(draw['white_balls']) == sorted(pb_draw['white_balls']) and draw['powerball'] == pb_draw['powerball']:
-                    # Numbers match, update jackpot and winners if needed
-                    if pb_draw.get('jackpot_amount', 0) > 0 and draw.get('jackpot_amount', 0) == 0:
-                        draw['jackpot_amount'] = pb_draw['jackpot_amount']
-                    
-                    if pb_draw.get('winners', 0) > 0 and draw.get('winners', 0) == 0:
-                        draw['winners'] = pb_draw['winners']
-                        
-                    # Mark as enhanced
-                    draw['source'] = f"{draw['source']}_enhanced"
+            if pb_draw and sorted(draw['white_balls']) == sorted(pb_draw['white_balls']) and draw['powerball'] == pb_draw['powerball']:
+                if pb_draw.get('jackpot_amount', 0) > 0 and draw.get('jackpot_amount', 0) == 0:
+                    draw['jackpot_amount'] = pb_draw['jackpot_amount']
+                if pb_draw.get('winners', 0) > 0 and draw.get('winners', 0) == 0:
+                    draw['winners'] = pb_draw['winners']
+                draw['source'] = f"{draw['source']}_enhanced"
         except Exception as e:
             logger.error(f"Error enhancing draw with details: {str(e)}")
+        
+        return draw    
+
+    def add_draw(self, 
+             draw_number: int, 
+             draw_date: str, 
+             white_balls: List[int], 
+             powerball: int, 
+             jackpot_amount: float = 0, 
+             winners: int = 0,
+             source: str = 'api', 
+             prize_breakdown: List[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """Add a new draw"""
+        # Check if draw already exists
+        if self.get_draw_by_number(draw_number):
+            logger.warning(f"Draw {draw_number} already exists")
+            return None
+        
+        # Insert draw
+        query = """
+        INSERT INTO draws 
+        (draw_number, draw_date, jackpot_amount, winners, source) 
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id, draw_number, draw_date, jackpot_amount, winners, source, created_at
+        """
+        
+        result = self.execute(query, (
+            draw_number, draw_date, jackpot_amount, winners, source
+        ))
+        
+        if not result:
+            return None
+        
+        draw = result[0]
+        
+        # Insert individual numbers
+        number_params = []
+        for i, number in enumerate(white_balls):
+            number_params.append((draw["id"], i+1, number, False))
+        
+        # Insert powerball
+        number_params.append((draw["id"], 6, powerball, True))
+        
+        numbers_query = """
+        INSERT INTO numbers (draw_id, position, number, is_powerball)
+        VALUES %s
+        """
+        
+        self.execute_many(numbers_query, number_params)
+        
+        # Insert prize breakdown if provided
+        if prize_breakdown:
+            try:
+                # Check if the prize_breakdowns table exists
+                check_table_query = """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'prize_breakdowns'
+                )
+                """
+                table_exists_result = self.execute(check_table_query)
+                table_exists = table_exists_result[0]['exists'] if table_exists_result else False
+                
+                if not table_exists:
+                    # Create the table if it doesn't exist
+                    create_table_query = """
+                    CREATE TABLE prize_breakdowns (
+                        id SERIAL PRIMARY KEY,
+                        draw_id INTEGER REFERENCES draws(id) ON DELETE CASCADE,
+                        tier TEXT NOT NULL,
+                        winners INTEGER NOT NULL DEFAULT 0,
+                        prize TEXT NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    )
+                    """
+                    self.execute(create_table_query)
+                    
+                    # Create index
+                    self.execute("CREATE INDEX idx_prize_breakdowns_draw_id ON prize_breakdowns(draw_id)")
+                
+                # Insert prize breakdown entries
+                for prize in prize_breakdown:
+                    # Convert winners to integer if it's a string
+                    winners_count = prize.get('winners', 0)
+                    if isinstance(winners_count, str):
+                        try:
+                            winners_count = int(winners_count)
+                        except ValueError:
+                            winners_count = 0
+                    
+                    prize_query = """
+                    INSERT INTO prize_breakdowns (draw_id, tier, winners, prize)
+                    VALUES (%s, %s, %s, %s)
+                    """
+                    self.execute(prize_query, (
+                        draw["id"], 
+                        prize.get('tier', ''), 
+                        winners_count, 
+                        prize.get('prize', '$0')
+                    ))
+                
+                logger.info(f"Added prize breakdown for draw #{draw_number}")
+                    
+            except Exception as e:
+                logger.error(f"Error saving prize breakdown: {str(e)}")
         
         return draw

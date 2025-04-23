@@ -455,11 +455,9 @@ async def check_numbers(
 
 # Scraping endpoints
 @app.post("/api/scrape/latest")
+
 async def scrape_latest(background_tasks: BackgroundTasks):
-    """
-    Scrape the latest Powerball draw results - no authentication required
-    Uses both CalLottery and Powerball.com to get the most complete data
-    """
+    # Remove the dependency entirely
     scraper = PowerballScraper()
     db = get_db()
     
@@ -474,19 +472,7 @@ async def scrape_latest(background_tasks: BackgroundTasks):
         existing_draw = db.get_draw_by_number(draw_data['draw_number'])
         
         if existing_draw:
-            # Try to enhance the existing draw with more details
-            enhanced_draw = await scraper.enhance_draw_with_details(existing_draw)
-            
-            # If enhanced, update in the database
-            if enhanced_draw.get('source', '').endswith('_enhanced'):
-                # Update draw in database with enhanced details
-                db.update_draw(
-                    draw_id=enhanced_draw['id'],
-                    jackpot_amount=enhanced_draw['jackpot_amount'],
-                    winners=enhanced_draw['winners']
-                )
-            
-            return {"success": True, "message": "Draw already exists", "draw": enhanced_draw}
+            return {"success": True, "message": "Draw already exists", "draw": existing_draw}
         
         # Add to database
         new_draw = db.add_draw(
@@ -494,9 +480,10 @@ async def scrape_latest(background_tasks: BackgroundTasks):
             draw_date=draw_data['draw_date'],
             white_balls=draw_data['white_balls'],
             powerball=draw_data['powerball'],
-            jackpot_amount=draw_data['jackpot_amount'],
-            winners=draw_data['winners'],
-            source=draw_data.get('source', 'api')
+            jackpot_amount=draw_data.get('jackpot_amount', 0),
+            winners=draw_data.get('winners', 0),
+            source=draw_data.get('source', 'api'),
+            prize_breakdown=draw_data.get('prize_breakdown')
         )
         
         if not new_draw:
