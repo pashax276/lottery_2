@@ -95,6 +95,58 @@ async def lifespan(app: FastAPI):
         app.state.db.init_schema()
         # Initialize auth schema
         init_auth_schema()
+        # Populate draws if empty
+        draws = app.state.db.get_draws(limit=1)
+        if not draws:
+            logger.info("No draws found, scraping historical draws...")
+            try:
+                historical_draws = await app.state.scraper.fetch_historical_draws(count=100)
+                inserted_count = 0
+                
+                for draw_data in historical_draws:
+                    try:
+                        # Validate draw data
+                        if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
+                            logger.error(f"Invalid white_balls for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
+                            continue
+                        if not all(1 <= x <= 69 for x in draw_data['white_balls']):
+                            logger.error(f"White balls out of range for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
+                            continue
+                        if len(set(draw_data['white_balls'])) != 5:
+                            logger.error(f"Duplicate white balls for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
+                            continue
+                        if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
+                            logger.error(f"Invalid powerball for draw {draw_data['draw_number']}: {draw_data['powerball']}")
+                            continue
+                        if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
+                            logger.error(f"Invalid draw_number: {draw_data['draw_number']}")
+                            continue
+                        if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
+                            logger.error(f"Invalid draw_date for draw {draw_data['draw_number']}: {draw_data['draw_date']}")
+                            continue
+                        
+                        logger.debug(f"Attempting to insert draw {draw_data['draw_number']}")
+                        result = app.state.db.add_draw(
+                            draw_number=draw_data['draw_number'],
+                            draw_date=draw_data['draw_date'],
+                            white_balls=draw_data['white_balls'],
+                            powerball=draw_data['powerball'],
+                            jackpot_amount=draw_data.get('jackpot_amount', 0),
+                            winners=draw_data.get('winners', 0),
+                            source=draw_data.get('source', 'api')
+                        )
+                        if result:
+                            inserted_count += 1
+                            logger.info(f"Inserted draw {draw_data['draw_number']}")
+                        else:
+                            logger.warning(f"Failed to insert draw {draw_data['draw_number']}")
+                    except Exception as e:
+                        logger.error(f"Error inserting draw {draw_data['draw_number']}: {str(e)}")
+                        continue
+                
+                logger.info(f"Populated {inserted_count} historical draws")
+            except Exception as e:
+                logger.error(f"Error populating historical draws: {str(e)}")
     
     # Start the scheduler
     if os.environ.get("ENABLE_SCHEDULER", "false").lower() == "true":
@@ -719,6 +771,16 @@ async def get_pair_analysis():
     except Exception as e:
         logger.error(f"Error in pair analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ideas")
+async def get_ideas():
+    return {
+        "ideas": [
+            {"id": 1, "title": "Implement user authentication", "description": "Add JWT-based authentication for secure user access."},
+            {"id": 2, "title": "Enhance analytics dashboard", "description": "Create interactive charts for draw statistics."},
+            {"id": 3, "title": "Add prediction history", "description": "Store and display past predictions for users."},
+        ]
+    }
 
 @app.get("/api/insights/positions")
 async def get_position_analysis():

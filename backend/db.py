@@ -117,7 +117,7 @@ class PostgresDB:
     
     def execute_many(self, query: str, params_list: List[tuple]) -> bool:
         """
-        Execute a query with multiple parameter sets
+        Execute a query with multiple parameter sets in batches
         
         Args:
             query: SQL query to execute
@@ -129,15 +129,23 @@ class PostgresDB:
         if not params_list:
             return True
         
-        try:
-            with self.cursor() as cursor:
-                execute_values(cursor, query, params_list)
-                return True
-        
-        except Exception as e:
-            logger.error(f"Error executing batch query: {str(e)}")
-            logger.error(f"Query: {query}")
-            return False
+        batch_size = 50  # Process in batches to avoid large transactions
+        for i in range(0, len(params_list), batch_size):
+            batch = params_list[i:i + batch_size]
+            try:
+                with self.cursor() as cursor:
+                    execute_values(cursor, query, batch)
+                    logger.debug(f"Inserted batch of {len(batch)} records")
+            except psycopg2.errors.UniqueViolation as e:
+                logger.info(f"Unique violation in batch insert: {str(e)}")
+                # Continue with next batch
+                continue
+            except Exception as e:
+                logger.error(f"Error executing batch query: {str(e)}")
+                logger.error(f"Query: {query}")
+                logger.error(f"Batch size: {len(batch)}")
+                return False
+        return True
     
     def init_schema(self) -> bool:
         """
@@ -259,7 +267,8 @@ class PostgresDB:
         ORDER BY draw_number DESC 
         LIMIT %s OFFSET %s
         """
-        return self.execute(query, (limit, offset)) or []
+        result = self.execute(query, (limit, offset))
+        return result or []
     
     def get_draw_by_number(self, draw_number: int) -> Optional[Dict[str, Any]]:
         """Get a draw by its draw number"""
@@ -306,42 +315,61 @@ class PostgresDB:
         source: str = 'api'
     ) -> Optional[Dict[str, Any]]:
         """Add a new draw with white_balls and powerball"""
-        if self.get_draw_by_number(draw_number):
-            logger.warning(f"Draw {draw_number} already exists")
+        logger.debug(f"Attempting to add draw: draw_number={draw_number}, date={draw_date}, white_balls={white_balls}, powerball={powerball}")
+        
+        # Check for existing draw
+        existing_draw = self.get_draw_by_number(draw_number)
+        if existing_draw:
+            logger.info(f"Draw {draw_number} already exists, skipping")
+            return existing_draw
+        
+        try:
+            query = """
+            INSERT INTO draws 
+            (draw_number, draw_date, white_balls, powerball, jackpot_amount, 
+             winners, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, draw_number, draw_date, white_balls, powerball, 
+                      jackpot_amount, winners, source
+            """
+            
+            result = self.execute(query, (
+                draw_number, draw_date, white_balls, powerball, jackpot_amount,
+                winners, source
+            ))
+            
+            if not result:
+                logger.error(f"Failed to insert draw {draw_number}: No result returned")
+                return None
+            
+            draw = result[0]
+            logger.info(f"Successfully added draw {draw_number}")
+            
+            # Insert into numbers table
+            number_params = []
+            for i, number in enumerate(white_balls):
+                number_params.append((draw["id"], i+1, number, False))
+            number_params.append((draw["id"], 6, powerball, True))
+            
+            numbers_query = """
+            INSERT INTO numbers (draw_id, position, number, is_powerball)
+            VALUES %s
+            """
+            
+            if not self.execute_many(numbers_query, number_params):
+                logger.error(f"Failed to insert numbers for draw {draw_number}")
+            
+            return draw
+        
+        except psycopg2.errors.UniqueViolation as e:
+            logger.info(f"Draw {draw_number} already exists in database: {str(e)}")
+            return self.get_draw_by_number(draw_number)
+        except psycopg2.errors.CheckViolation as e:
+            logger.error(f"Check violation for draw {draw_number}: {str(e)}")
             return None
-        
-        query = """
-        INSERT INTO draws 
-        (draw_number, draw_date, white_balls, powerball, jackpot_amount, 
-         winners, source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        RETURNING id, draw_number, draw_date, white_balls, powerball, 
-                  jackpot_amount, winners, source
-        """
-        
-        result = self.execute(query, (
-            draw_number, draw_date, white_balls, powerball, jackpot_amount,
-            winners, source
-        ))
-        
-        if not result:
+        except Exception as e:
+            logger.error(f"Error adding draw {draw_number}: {str(e)}")
             return None
-        
-        draw = result[0]
-        
-        number_params = []
-        for i, number in enumerate(white_balls):
-            number_params.append((draw["id"], i+1, number, False))
-        number_params.append((draw["id"], 6, powerball, True))
-        
-        numbers_query = """
-        INSERT INTO numbers (draw_id, position, number, is_powerball)
-        VALUES %s
-        """
-        
-        self.execute_many(numbers_query, number_params)
-        
-        return draw
     
     def add_prediction(
         self,

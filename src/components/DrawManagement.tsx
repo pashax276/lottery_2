@@ -25,14 +25,17 @@ const DrawManagement = () => {
 
     try {
       console.log("Using API URL:", API_URL);
-      console.log("Scraping API at:", `${API_URL}/api/scrape/latest`);
+      const scrapeUrl = `${API_URL}/api/scrape/latest`;
+      console.log("Scraping API at:", scrapeUrl);
       
-      const response = await fetch(`${API_URL}/api/scrape/latest`, {
+      const response = await fetch(scrapeUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
       });
+
+      console.log("Scrape response status:", response.status, response.statusText);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -40,10 +43,13 @@ const DrawManagement = () => {
       }
 
       const result = await response.json();
+      console.log("Scrape response data:", result);
       
       if (result.success) {
         setSuccess('Successfully scraped latest Powerball data');
         showToast.success('Successfully scraped latest Powerball data');
+        // Trigger draw refresh
+        await fetch(`${API_URL}/api/draws?limit=1000&offset=0`);
       } else {
         throw new Error(result.error || 'Failed to scrape data');
       }

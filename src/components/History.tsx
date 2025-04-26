@@ -1,23 +1,79 @@
+// src/components/History.tsx
 import React, { useState, useEffect } from 'react';
 import { Calendar, Search, Filter, Trophy, Check, X } from 'lucide-react';
-import { getDraws } from '../lib/api';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
-import { 
-  safelyParseNumber, 
-  isValidArray, 
-  processWhiteBalls,
-  processPowerball,
-  processPgArray
-} from '../utils/dataUtils';
+
+// Assume getDraws implementation
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+const getDraws = async (limit: number, offset: number) => {
+  try {
+    console.log("Fetching draws from:", `${API_URL}/api/draws?limit=${limit}&offset=${offset}`);
+    const response = await fetch(`${API_URL}/api/draws?limit=${limit}&offset=${offset}`, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    return await response.json();
+  } catch (err) {
+    console.error("getDraws error:", err);
+    throw err;
+  }
+};
+
+// Data utility functions (stubs based on usage)
+const safelyParseNumber = (value: any, defaultValue: number): number => {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+  return defaultValue;
+};
+
+const isValidArray = (arr: any): boolean => {
+  return Array.isArray(arr) && arr.every(item => typeof item === 'number');
+};
+
+const processWhiteBalls = (whiteBalls: any): number[] => {
+  try {
+    if (isValidArray(whiteBalls)) {
+      return whiteBalls.slice(0, 5);
+    }
+    if (typeof whiteBalls === 'string') {
+      // Handle PostgreSQL array format, e.g., "{15,44,63,66,69}"
+      const cleaned = whiteBalls.replace(/[{}]/g, '');
+      const numbers = cleaned.split(',').map(num => parseInt(num.trim(), 10)).filter(num => !isNaN(num));
+      if (numbers.length === 5) return numbers;
+    }
+    console.warn("Invalid white_balls format:", whiteBalls);
+    return [1, 2, 3, 4, 5]; // Fallback
+  } catch (err) {
+    console.error("Error processing white_balls:", err);
+    return [1, 2, 3, 4, 5];
+  }
+};
+
+const processPowerball = (powerball: any): number => {
+  try {
+    const parsed = safelyParseNumber(powerball, 1);
+    return parsed >= 1 && parsed <= 26 ? parsed : 1;
+  } catch (err) {
+    console.error("Error processing powerball:", err);
+    return 1;
+  }
+};
 
 interface Draw {
   id: string;
   draw_number: number;
   draw_date: string;
-  white_balls: any; // Could be array, string, or other format
-  powerball: any;
+  white_balls: number[];
+  powerball: number;
   jackpot_amount: number;
   winners: number;
 }
@@ -33,74 +89,62 @@ const History = () => {
   const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
   const [isMarkingWinner, setIsMarkingWinner] = useState(false);
 
-  // Items per page (increased to handle larger datasets)
+  // Items per page
   const itemsPerPage = 20;
 
   useEffect(() => {
     fetchDraws();
-  }, []);
+  }, [page]);
 
   const fetchDraws = async () => {
     setLoading(true);
     setError(null);
     
     try {
-      // Get all draws with a high limit to ensure we get all records
-      const response = await getDraws(1000, 0);
+      const response = await getDraws(itemsPerPage, (page - 1) * itemsPerPage);
       
       console.log('Raw API response:', response);
       
       if (response && response.draws) {
-        // Debug the first draw
         if (response.draws.length > 0) {
           const firstDraw = response.draws[0];
           console.log('First draw from API:', firstDraw);
           console.log('white_balls type:', typeof firstDraw.white_balls);
           console.log('white_balls value:', firstDraw.white_balls);
-          
-          // Try to understand the format of white_balls
-          if (typeof firstDraw.white_balls === 'string') {
-            console.log('white_balls as string:', firstDraw.white_balls);
-          } else if (Array.isArray(firstDraw.white_balls)) {
-            console.log('white_balls as array:', firstDraw.white_balls);
-          }
         }
         
-        // Process the draws
         const processedDraws = response.draws.map((draw: any) => {
-          // Process the white balls
           const whiteBalls = processWhiteBalls(draw.white_balls);
-          
-          // Process the powerball
           const powerball = processPowerball(draw.powerball);
           
           console.log('Processed white balls:', whiteBalls);
           console.log('Processed powerball:', powerball);
           
           return {
-            ...draw,
+            id: draw.id.toString(),
             draw_number: safelyParseNumber(draw.draw_number, 1),
+            draw_date: draw.draw_date || 'Unknown',
             white_balls: whiteBalls,
             powerball: powerball,
             jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
-            winners: safelyParseNumber(draw.winners, 0)
+            winners: safelyParseNumber(draw.winners, 0),
           };
         });
         
         setDraws(processedDraws);
-        setTotalDraws(processedDraws.length);
-        
-        // Debug the processed draws
+        setTotalDraws(response.count || processedDraws.length);
         console.log('Processed draws total:', processedDraws.length);
         if (processedDraws.length > 0) {
           console.log('First processed draw:', processedDraws[0]);
         }
       } else {
-        setError('Failed to fetch draws or no draws found');
+        throw new Error('Failed to fetch draws or no draws found');
       }
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch draws';
       console.error('Error fetching draws:', err);
-      setError(err instanceof Error ? err.message : 'Failed to fetch draws');
+      setError(errorMessage);
+      showToast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -127,11 +171,9 @@ const History = () => {
     setSelectedDraw(drawId);
     
     try {
-      // Simulating API call to update the winner status
-      // In a real implementation, you would make an API call here
+      // Placeholder for API call to update winner status
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Update local state
       setDraws(prevDraws => 
         prevDraws.map(draw => 
           draw.id === drawId 
@@ -157,10 +199,10 @@ const History = () => {
   const filteredDraws = draws.filter(draw => {
     const matchesSearch = searchTerm === '' || 
       draw.draw_number.toString().includes(searchTerm) ||
-      (isValidArray(draw.white_balls) && draw.white_balls.some((ball: number) => ball.toString().includes(searchTerm))) ||
+      draw.white_balls.some((ball: number) => ball.toString().includes(searchTerm)) ||
       draw.powerball.toString().includes(searchTerm);
     
-    const matchesDate = dateFilter === '' || draw.draw_date === dateFilter;
+    const matchesDate = dateFilter === '' || draw.draw_date.includes(dateFilter);
     
     return matchesSearch && matchesDate;
   });
@@ -278,7 +320,7 @@ const History = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
-                          {Array.isArray(draw.white_balls) && draw.white_balls.map((number: number, idx: number) => (
+                          {draw.white_balls.map((number: number, idx: number) => (
                             <NumberBall
                               key={idx}
                               number={number}

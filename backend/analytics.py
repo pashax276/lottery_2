@@ -9,11 +9,11 @@ import random
 import joblib
 import os
 from sklearn.cluster import KMeans
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 import io
@@ -52,19 +52,26 @@ class PowerballAnalytics:
         # Convert to DataFrame
         data = []
         for draw in draws:
+            if not draw.get('white_balls') or len(draw['white_balls']) < 5 or not draw.get('powerball'):
+                logger.warning(f"Invalid draw data: {draw}")
+                continue
             row = {
                 'draw_number': draw['draw_number'],
                 'draw_date': datetime.fromisoformat(draw['draw_date']) if isinstance(draw['draw_date'], str) else draw['draw_date'],
-                'wb1': draw['white_balls'][0] if len(draw['white_balls']) > 0 else None,
-                'wb2': draw['white_balls'][1] if len(draw['white_balls']) > 1 else None,
-                'wb3': draw['white_balls'][2] if len(draw['white_balls']) > 2 else None,
-                'wb4': draw['white_balls'][3] if len(draw['white_balls']) > 3 else None,
-                'wb5': draw['white_balls'][4] if len(draw['white_balls']) > 4 else None,
+                'wb1': draw['white_balls'][0],
+                'wb2': draw['white_balls'][1],
+                'wb3': draw['white_balls'][2],
+                'wb4': draw['white_balls'][3],
+                'wb5': draw['white_balls'][4],
                 'pb': draw['powerball'],
                 'jackpot': draw['jackpot_amount'],
                 'winners': draw['winners']
             }
             data.append(row)
+        
+        if not data:
+            logger.warning("No valid draw data after filtering")
+            return pd.DataFrame()
         
         # Create DataFrame
         df = pd.DataFrame(data)
@@ -82,6 +89,10 @@ class PowerballAnalytics:
     
     def add_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add derived features for analysis"""
+        if df.empty:
+            logger.warning("Empty DataFrame in add_features")
+            return df
+        
         # Calculate day of week, month, etc.
         df['day_of_week'] = df['draw_date'].dt.dayofweek
         df['month'] = df['draw_date'].dt.month
@@ -115,13 +126,15 @@ class PowerballAnalytics:
         # Calculate if powerball is low/high (1-13 vs 14-26)
         df['pb_is_low'] = df['pb'] <= 13
         
-        # Lagged features (previous draw)
-        for col in ['wb1', 'wb2', 'wb3', 'wb4', 'wb5', 'pb', 'wb_sum', 'wb_odd_count']:
-            df[f'{col}_prev'] = df[col].shift(1)
-            df[f'{col}_diff'] = df[col] - df[f'{col}_prev']
-        
-        # Drop rows with NaN (first row will have NaN for lagged features)
-        df = df.dropna()
+        # Lagged features (previous draw), only if multiple draws
+        if len(df) > 1:
+            for col in ['wb1', 'wb2', 'wb3', 'wb4', 'wb5', 'pb', 'wb_sum', 'wb_odd_count']:
+                df[f'{col}_prev'] = df[col].shift(1)
+                df[f'{col}_diff'] = df[col] - df[f'{col}_prev']
+            # Drop rows with NaN (first row will have NaN for lagged features)
+            df = df.dropna()
+        else:
+            logger.info("Single draw, skipping lagged features")
         
         return df
     
@@ -168,6 +181,16 @@ class PowerballAnalytics:
             # Split data
             X = df[feature_cols]
             y = df[target_col]
+            if len(X) < 2:
+                logger.warning(f"Insufficient data for training {target_col} model")
+                models[target_col] = {
+                    'model': None,
+                    'scaler': None,
+                    'train_score': 0,
+                    'test_score': 0
+                }
+                continue
+            
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
             
             # Scale features
@@ -207,6 +230,15 @@ class PowerballAnalytics:
         # Split data
         X = df[feature_cols]
         y = df[target_col]
+        if len(X) < 2:
+            logger.warning("Insufficient data for training powerball model")
+            return {
+                'model': None,
+                'scaler': None,
+                'train_score': 0,
+                'test_score': 0
+            }
+        
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
         # Scale features
@@ -281,24 +313,21 @@ class PowerballAnalytics:
             models = self.load_models()
             
             if not models:
-                # Train new models if none exist
-                self.train_models()
-                models = self.load_models()
-                
-                if not models:
-                    # Fall back to pattern-based prediction
-                    return self.generate_pattern_prediction()
+                logger.warning("No trained models available, falling back to pattern prediction")
+                return self.generate_pattern_prediction()
             
             # Get latest draw for features
             latest_draw = self.db.get_latest_draw()
             
             if not latest_draw:
                 logger.warning("No previous draws found for prediction")
-                # Fall back to pattern-based prediction
                 return self.generate_pattern_prediction()
             
             # Prepare features for prediction
             features = self.prepare_prediction_features(latest_draw)
+            if not features:
+                logger.warning("Failed to prepare prediction features")
+                return self.generate_pattern_prediction()
             
             # Predict white balls
             white_balls = []
@@ -306,24 +335,31 @@ class PowerballAnalytics:
             
             # Make predictions for each position
             for i in range(1, 6):
-                wb_model = models['white_ball_models'][f'wb{i}']
+                wb_model = models['white_ball_models'].get(f'wb{i}', {})
+                model = wb_model.get('model')
+                scaler = wb_model.get('scaler')
+                
+                if not model or not scaler:
+                    logger.warning(f"No model or scaler for wb{i}, using pattern prediction")
+                    return self.generate_pattern_prediction()
                 
                 # Scale features
-                scaled_features = wb_model['scaler'].transform([features])
+                scaled_features = scaler.transform([features])
                 
                 # Predict
-                prediction = wb_model['model'].predict(scaled_features)[0]
+                prediction = model.predict(scaled_features)
+                if not prediction or len(prediction) == 0:
+                    logger.warning(f"Empty prediction for wb{i}")
+                    return self.generate_pattern_prediction()
                 
-                # Round to nearest integer and ensure it's in range
-                ball = int(round(prediction))
+                ball = int(round(prediction[0]))
                 ball = max(1, min(69, ball))
                 
                 # Ensure no duplicates
                 attempts = 0
                 while ball in used_positions and attempts < 10:
-                    # Add small random adjustment and try again
                     adjustment = random.randint(-5, 5)
-                    ball = int(round(prediction + adjustment))
+                    ball = int(round(prediction[0] + adjustment))
                     ball = max(1, min(69, ball))
                     attempts += 1
                 
@@ -331,11 +367,9 @@ class PowerballAnalytics:
                     white_balls.append(ball)
                     used_positions.add(ball)
                 else:
-                    # If we still have a duplicate after multiple attempts,
-                    # sample from less common numbers
                     freq_analysis = self.db.get_frequency_analysis()
                     white_freq = [(int(num), freq) for num, freq in freq_analysis['white_balls'].items()]
-                    white_freq.sort(key=lambda x: x[1])  # Sort by frequency (lowest first)
+                    white_freq.sort(key=lambda x: x[1])
                     
                     for num, _ in white_freq:
                         if num not in used_positions:
@@ -348,23 +382,33 @@ class PowerballAnalytics:
             
             # Predict powerball
             pb_model = models['powerball_model']
-            scaled_features = pb_model['scaler'].transform([features])
-            pb_prediction = pb_model['model'].predict(scaled_features)[0]
+            model = pb_model.get('model')
+            scaler = pb_model.get('scaler')
             
-            # Round to nearest integer and ensure it's in range
-            powerball = int(round(pb_prediction))
+            if not model or not scaler:
+                logger.warning("No powerball model or scaler, using pattern prediction")
+                return self.generate_pattern_prediction()
+            
+            scaled_features = scaler.transform([features])
+            pb_prediction = model.predict(scaled_features)
+            
+            if not pb_prediction or len(pb_prediction) == 0:
+                logger.warning("Empty powerball prediction")
+                return self.generate_pattern_prediction()
+            
+            powerball = int(round(pb_prediction[0]))
             powerball = max(1, min(26, powerball))
             
             # Calculate confidence based on model scores
-            wb_confidence = np.mean([m['test_score'] for m in models['white_ball_models'].values()])
+            wb_confidence = np.mean([m['test_score'] for m in models['white_ball_models'].values() if m.get('test_score')])
             pb_confidence = pb_model['test_score']
-            confidence = (wb_confidence * 0.8 + pb_confidence * 0.2) * 100  # Weight white balls more
+            confidence = (wb_confidence * 0.8 + pb_confidence * 0.2) * 100
             
             # Create prediction result
             result = {
                 'white_balls': white_balls,
                 'powerball': powerball,
-                'confidence': min(95, max(60, confidence)),  # Cap confidence between 60-95%
+                'confidence': min(95, max(60, confidence)),
                 'method': 'machine-learning',
                 'rationale': 'Based on Random Forest regression models trained on historical draw patterns'
             }
@@ -373,99 +417,110 @@ class PowerballAnalytics:
             
         except Exception as e:
             logger.error(f"Error generating ML prediction: {str(e)}")
-            # Fall back to pattern-based prediction
             return self.generate_pattern_prediction()
     
     def prepare_prediction_features(self, latest_draw: Dict[str, Any]) -> List[float]:
         """Prepare features for prediction from the latest draw"""
-        # Get some historical draws for context
-        recent_draws = self.db.get_draws(limit=10)
-        
-        if len(recent_draws) < 2:
-            # Not enough historical data
-            raise ValueError("Not enough historical data for ML prediction")
-        
-        # Extract the most recent draw (for current features)
-        current = latest_draw
-        
-        # Extract the second most recent draw (for lagged features)
-        previous = next((d for d in recent_draws if d['draw_number'] < current['draw_number']), None)
-        
-        if not previous:
-            raise ValueError("Could not find previous draw")
-        
-        # Create feature vector (should match the training features)
-        features = []
-        
-        # Date features
-        draw_date = datetime.fromisoformat(current['draw_date']) if isinstance(current['draw_date'], str) else current['draw_date']
-        features.extend([
-            draw_date.weekday(),  # day_of_week
-            draw_date.month,      # month
-            draw_date.year        # year
-        ])
-        
-        # Statistical features
-        white_balls = current['white_balls']
-        features.extend([
-            sum(white_balls),                     # wb_sum
-            np.mean(white_balls),                 # wb_mean
-            np.std(white_balls),                  # wb_std
-            sum(1 for n in white_balls if n % 2 == 1),  # wb_odd_count
-            sum(1 for n in white_balls if n % 2 == 0),  # wb_even_count
-            sum(1 for n in white_balls if n <= 35),     # wb_low_count
-            sum(1 for n in white_balls if n > 35)       # wb_high_count
-        ])
-        
-        # Decade distribution
-        for decade in range(0, 7):
-            decade_start = decade * 10 + 1
-            decade_end = min(69, (decade + 1) * 10)
-            decade_count = sum(1 for n in white_balls if decade_start <= n <= decade_end)
-            features.append(decade_count)
-        
-        # Powerball features
-        powerball = current['powerball']
-        features.extend([
-            1 if powerball % 2 == 1 else 0,  # pb_is_odd
-            1 if powerball <= 13 else 0      # pb_is_low
-        ])
-        
-        # Lagged features
-        prev_white_balls = previous['white_balls']
-        prev_powerball = previous['powerball']
-        
-        features.extend([
-            current['white_balls'][0],            # wb1
-            current['white_balls'][1],            # wb2
-            current['white_balls'][2],            # wb3
-            current['white_balls'][3],            # wb4
-            current['white_balls'][4],            # wb5
-            current['powerball'],                 # pb
-            sum(white_balls),                     # wb_sum
-            sum(1 for n in white_balls if n % 2 == 1),  # wb_odd_count
+        try:
+            # Get some historical draws for context
+            recent_draws = self.db.get_draws(limit=10)
             
-            previous['white_balls'][0],           # wb1_prev
-            previous['white_balls'][1],           # wb2_prev
-            previous['white_balls'][2],           # wb3_prev
-            previous['white_balls'][3],           # wb4_prev
-            previous['white_balls'][4],           # wb5_prev
-            previous['powerball'],                # pb_prev
-            sum(prev_white_balls),                # wb_sum_prev
-            sum(1 for n in prev_white_balls if n % 2 == 1),  # wb_odd_count_prev
+            # If no previous draws, use basic features
+            if len(recent_draws) < 1:
+                logger.warning("No historical data for ML prediction")
+                return []
             
-            current['white_balls'][0] - previous['white_balls'][0],  # wb1_diff
-            current['white_balls'][1] - previous['white_balls'][1],  # wb2_diff
-            current['white_balls'][2] - previous['white_balls'][2],  # wb3_diff
-            current['white_balls'][3] - previous['white_balls'][3],  # wb4_diff
-            current['white_balls'][4] - previous['white_balls'][4],  # wb5_diff
-            current['powerball'] - previous['powerball'],            # pb_diff
-            sum(white_balls) - sum(prev_white_balls),                # wb_sum_diff
-            (sum(1 for n in white_balls if n % 2 == 1) - 
-             sum(1 for n in prev_white_balls if n % 2 == 1))         # wb_odd_count_diff
-        ])
+            # Extract the most recent draw (for current features)
+            current = latest_draw
+            
+            # Extract the second most recent draw (for lagged features)
+            previous = next((d for d in recent_draws if d['draw_number'] < current['draw_number']), None)
+            
+            # Create feature vector
+            features = []
+            
+            # Date features
+            draw_date = datetime.fromisoformat(current['draw_date']) if isinstance(current['draw_date'], str) else current['draw_date']
+            features.extend([
+                draw_date.weekday(),
+                draw_date.month,
+                draw_date.year
+            ])
+            
+            # Statistical features
+            white_balls = current['white_balls']
+            if not white_balls or len(white_balls) < 5:
+                logger.warning("Invalid white balls in latest draw")
+                return []
+            
+            features.extend([
+                sum(white_balls),
+                np.mean(white_balls),
+                np.std(white_balls),
+                sum(1 for n in white_balls if n % 2 == 1),
+                sum(1 for n in white_balls if n % 2 == 0),
+                sum(1 for n in white_balls if n <= 35),
+                sum(1 for n in white_balls if n > 35)
+            ])
+            
+            # Decade distribution
+            for decade in range(0, 7):
+                decade_start = decade * 10 + 1
+                decade_end = min(69, (decade + 1) * 10)
+                decade_count = sum(1 for n in white_balls if decade_start <= n <= decade_end)
+                features.append(decade_count)
+            
+            # Powerball features
+            powerball = current['powerball']
+            features.extend([
+                1 if powerball % 2 == 1 else 0,
+                1 if powerball <= 13 else 0
+            ])
+            
+            # Lagged features (only if previous draw exists)
+            if previous:
+                prev_white_balls = previous['white_balls']
+                prev_powerball = previous['powerball']
+                
+                if not prev_white_balls or len(prev_white_balls) < 5:
+                    logger.warning("Invalid previous white balls")
+                    return features
+                
+                features.extend([
+                    current['white_balls'][0],
+                    current['white_balls'][1],
+                    current['white_balls'][2],
+                    current['white_balls'][3],
+                    current['white_balls'][4],
+                    current['powerball'],
+                    sum(white_balls),
+                    sum(1 for n in white_balls if n % 2 == 1),
+                    
+                    previous['white_balls'][0],
+                    previous['white_balls'][1],
+                    previous['white_balls'][2],
+                    previous['white_balls'][3],
+                    previous['white_balls'][4],
+                    previous['powerball'],
+                    sum(prev_white_balls),
+                    sum(1 for n in prev_white_balls if n % 2 == 1),
+                    
+                    current['white_balls'][0] - previous['white_balls'][0],
+                    current['white_balls'][1] - previous['white_balls'][1],
+                    current['white_balls'][2] - previous['white_balls'][2],
+                    current['white_balls'][3] - previous['white_balls'][3],
+                    current['white_balls'][4] - previous['white_balls'][4],
+                    current['powerball'] - previous['powerball'],
+                    sum(white_balls) - sum(prev_white_balls),
+                    (sum(1 for n in white_balls if n % 2 == 1) - 
+                     sum(1 for n in prev_white_balls if n % 2 == 1))
+                ])
+            
+            return features
         
-        return features
+        except Exception as e:
+            logger.error(f"Error preparing prediction features: {str(e)}")
+            return []
     
     def generate_pattern_prediction(self) -> Dict[str, Any]:
         """
@@ -497,11 +552,14 @@ class PowerballAnalytics:
             previous = recent_draws[i]
             
             # Calculate gaps between consecutive draws
-            gaps = [current['white_balls'][j] - previous['white_balls'][j] for j in range(5)]
+            gaps = [current['white_balls'][j] - previous['white_balls'][j] for j in range(min(5, len(current['white_balls']), len(previous['white_balls'])))]
             patterns.append(gaps)
         
         # Calculate average gap
-        avg_gaps = np.mean(patterns, axis=0)
+        if patterns:
+            avg_gaps = np.mean(patterns, axis=0)
+        else:
+            avg_gaps = [0] * 5
         
         # Use the latest draw as a base
         latest = recent_draws[0]
@@ -509,8 +567,7 @@ class PowerballAnalytics:
         # Apply the average gaps to generate a prediction
         predicted_white = []
         for i in range(5):
-            ball = latest['white_balls'][i] + round(avg_gaps[i])
-            # Ensure the ball is within range
+            ball = latest['white_balls'][i] + round(avg_gaps[i]) if i < len(avg_gaps) else latest['white_balls'][i]
             ball = max(1, min(69, ball))
             predicted_white.append(ball)
         
@@ -526,7 +583,7 @@ class PowerballAnalytics:
         
         # For powerball, use the most common one from recent draws
         pb_counter = Counter([d['powerball'] for d in recent_draws])
-        powerball = pb_counter.most_common(1)[0][0]
+        powerball = pb_counter.most_common(1)[0][0] if pb_counter else random.randint(1, 26)
         
         return {
             'white_balls': predicted_white,
@@ -554,7 +611,7 @@ class PowerballAnalytics:
             X = np.array(white_balls).reshape(-1, 1)
             
             # Determine optimal number of clusters (k)
-            k_values = range(2, 15)
+            k_values = range(2, min(15, len(X)))
             inertia = []
             
             for k in k_values:
@@ -563,9 +620,12 @@ class PowerballAnalytics:
                 inertia.append(kmeans.inertia_)
             
             # Find elbow point (where inertia starts to flatten)
-            diffs = np.diff(inertia)
-            elbow_idx = np.argmin(diffs) + 1
-            optimal_k = k_values[elbow_idx]
+            if len(inertia) > 1:
+                diffs = np.diff(inertia)
+                elbow_idx = np.argmin(diffs) + 1
+                optimal_k = k_values[elbow_idx]
+            else:
+                optimal_k = 2
             
             # Perform k-means clustering with optimal k
             kmeans = KMeans(n_clusters=optimal_k, random_state=42)
