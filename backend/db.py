@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
 from datetime import datetime
 from passlib.context import CryptContext
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -103,7 +104,6 @@ class PostgresDB:
             with self.cursor() as cursor:
                 cursor.execute(query, params)
                 
-                # Check if the query returns results
                 if cursor.description is not None:
                     return list(cursor.fetchall())
                 
@@ -117,7 +117,7 @@ class PostgresDB:
     
     def execute_many(self, query: str, params_list: List[tuple]) -> bool:
         """
-        Execute a query with multiple parameter sets
+        Execute a query with multiple parameter sets in batches
         
         Args:
             query: SQL query to execute
@@ -129,15 +129,23 @@ class PostgresDB:
         if not params_list:
             return True
         
-        try:
-            with self.cursor() as cursor:
-                execute_values(cursor, query, params_list)
-                return True
-        
-        except Exception as e:
-            logger.error(f"Error executing batch query: {str(e)}")
-            logger.error(f"Query: {query}")
-            return False
+        batch_size = 50  # Process in batches to avoid large transactions
+        for i in range(0, len(params_list), batch_size):
+            batch = params_list[i:i + batch_size]
+            try:
+                with self.cursor() as cursor:
+                    execute_values(cursor, query, batch)
+                    logger.debug(f"Inserted batch of {len(batch)} records")
+            except psycopg2.errors.UniqueViolation as e:
+                logger.info(f"Unique violation in batch insert: {str(e)}")
+                # Continue with next batch
+                continue
+            except Exception as e:
+                logger.error(f"Error executing batch query: {str(e)}")
+                logger.error(f"Query: {query}")
+                logger.error(f"Batch size: {len(batch)}")
+                return False
+        return True
     
     def init_schema(self) -> bool:
         """
@@ -155,7 +163,6 @@ class PostgresDB:
             with self.cursor() as cursor:
                 cursor.execute(schema_sql)
             
-            # Check if admin user exists, if not create it
             self.ensure_admin_user()
             
             logger.info("Database schema initialized successfully")
@@ -168,20 +175,16 @@ class PostgresDB:
     def ensure_admin_user(self) -> None:
         """Ensure the admin user exists in the database"""
         try:
-            # Check if admin user exists
             query = "SELECT * FROM users WHERE username = 'admin'"
             result = self.execute(query)
             
-            # If admin user doesn't exist, create it
             if not result:
                 admin_username = os.environ.get("ADMIN_USERNAME", "admin")
                 admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
                 admin_password = os.environ.get("ADMIN_PASSWORD", "powerball_admin")
                 
-                # Hash the password
                 hashed_password = pwd_context.hash(admin_password)
                 
-                # Insert admin user
                 query = """
                 INSERT INTO users (username, email, password_hash)
                 VALUES (%s, %s, %s)
@@ -191,17 +194,14 @@ class PostgresDB:
                 admin_user = self.execute(query, (admin_username, admin_email, hashed_password))
                 
                 if admin_user:
-                    # Create user stats for admin
                     self.get_user_stats(admin_user[0]['id'])
                     logger.info("Created admin user")
         except Exception as e:
             logger.error(f"Error ensuring admin user: {str(e)}")
     
-    # User authentication methods
     def authenticate_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
         """Authenticate a user by username and password"""
         try:
-            # Get user
             query = "SELECT id, username, email, password_hash FROM users WHERE username = %s"
             result = self.execute(query, (username,))
             
@@ -210,15 +210,12 @@ class PostgresDB:
             
             user = result[0]
             
-            # Check if password hash exists
             if not user['password_hash']:
                 return None
             
-            # Verify password
             if not pwd_context.verify(password, user['password_hash']):
                 return None
             
-            # Return user without password hash
             return {
                 'id': user['id'],
                 'username': user['username'],
@@ -229,11 +226,9 @@ class PostgresDB:
             logger.error(f"Error authenticating user: {str(e)}")
             return None
     
-    # User operations
     def create_user(self, username: str, password: str, email: str = None) -> Optional[Dict[str, Any]]:
         """Create a new user"""
         try:
-            # Check if username already exists
             query = "SELECT * FROM users WHERE username = %s"
             existing_user = self.execute(query, (username,))
             
@@ -241,10 +236,8 @@ class PostgresDB:
                 logger.warning(f"Username '{username}' already exists")
                 return None
             
-            # Hash the password
             hashed_password = pwd_context.hash(password)
             
-            # Insert the user
             query = """
             INSERT INTO users (username, email, password_hash)
             VALUES (%s, %s, %s)
@@ -257,8 +250,6 @@ class PostgresDB:
                 return None
             
             user = result[0]
-            
-            # Create user stats
             self.get_user_stats(user['id'])
             
             return user
@@ -267,81 +258,128 @@ class PostgresDB:
             logger.error(f"Error creating user: {str(e)}")
             return None
     
-    # Draw operations
     def get_draws(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """Get draws with pagination"""
         query = """
-        SELECT * FROM draws 
+        SELECT id, draw_number, draw_date, white_balls, powerball, 
+               jackpot_amount, winners, source
+        FROM draws 
         ORDER BY draw_number DESC 
         LIMIT %s OFFSET %s
         """
-        return self.execute(query, (limit, offset)) or []
+        result = self.execute(query, (limit, offset))
+        return result or []
     
     def get_draw_by_number(self, draw_number: int) -> Optional[Dict[str, Any]]:
         """Get a draw by its draw number"""
-        query = "SELECT * FROM draws WHERE draw_number = %s"
+        query = """
+        SELECT id, draw_number, draw_date, white_balls, powerball, 
+               jackpot_amount, winners, source
+        FROM draws
+        WHERE draw_number = %s
+        """
         result = self.execute(query, (draw_number,))
         return result[0] if result else None
     
     def get_draw_by_date(self, draw_date: str) -> Optional[Dict[str, Any]]:
         """Get a draw by its date"""
-        query = "SELECT * FROM draws WHERE draw_date = %s"
+        query = """
+        SELECT id, draw_number, draw_date, white_balls, powerball, 
+               jackpot_amount, winners, source
+        FROM draws
+        WHERE draw_date = %s
+        """
         result = self.execute(query, (draw_date,))
         return result[0] if result else None
     
     def get_latest_draw(self) -> Optional[Dict[str, Any]]:
         """Get the latest draw"""
-        query = "SELECT * FROM draws ORDER BY draw_number DESC LIMIT 1"
+        query = """
+        SELECT id, draw_number, draw_date, white_balls, powerball, 
+               jackpot_amount, winners, source
+        FROM draws
+        ORDER BY draw_number DESC
+        LIMIT 1
+        """
         result = self.execute(query)
         return result[0] if result else None
     
-    def add_draw(self, draw_number: int, draw_date: str, white_balls: List[int], 
-                 powerball: int, jackpot_amount: float = 0, winners: int = 0,
-                 source: str = 'api') -> Optional[Dict[str, Any]]:
-        """Add a new draw"""
-        # Check if draw already exists
-        if self.get_draw_by_number(draw_number):
-            logger.warning(f"Draw {draw_number} already exists")
+    def add_draw(
+        self,
+        draw_number: int,
+        draw_date: str,
+        white_balls: List[int],
+        powerball: int,
+        jackpot_amount: float = 0,
+        winners: int = 0,
+        source: str = 'api'
+    ) -> Optional[Dict[str, Any]]:
+        """Add a new draw with white_balls and powerball"""
+        logger.debug(f"Attempting to add draw: draw_number={draw_number}, date={draw_date}, white_balls={white_balls}, powerball={powerball}")
+        
+        # Check for existing draw
+        existing_draw = self.get_draw_by_number(draw_number)
+        if existing_draw:
+            logger.info(f"Draw {draw_number} already exists, skipping")
+            return existing_draw
+        
+        try:
+            query = """
+            INSERT INTO draws 
+            (draw_number, draw_date, white_balls, powerball, jackpot_amount, 
+             winners, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, draw_number, draw_date, white_balls, powerball, 
+                      jackpot_amount, winners, source
+            """
+            
+            result = self.execute(query, (
+                draw_number, draw_date, white_balls, powerball, jackpot_amount,
+                winners, source
+            ))
+            
+            if not result:
+                logger.error(f"Failed to insert draw {draw_number}: No result returned")
+                return None
+            
+            draw = result[0]
+            logger.info(f"Successfully added draw {draw_number}")
+            
+            # Insert into numbers table
+            number_params = []
+            for i, number in enumerate(white_balls):
+                number_params.append((draw["id"], i+1, number, False))
+            number_params.append((draw["id"], 6, powerball, True))
+            
+            numbers_query = """
+            INSERT INTO numbers (draw_id, position, number, is_powerball)
+            VALUES %s
+            """
+            
+            if not self.execute_many(numbers_query, number_params):
+                logger.error(f"Failed to insert numbers for draw {draw_number}")
+            
+            return draw
+        
+        except psycopg2.errors.UniqueViolation as e:
+            logger.info(f"Draw {draw_number} already exists in database: {str(e)}")
+            return self.get_draw_by_number(draw_number)
+        except psycopg2.errors.CheckViolation as e:
+            logger.error(f"Check violation for draw {draw_number}: {str(e)}")
             return None
-        
-        # Insert draw
-        query = """
-        INSERT INTO draws 
-        (draw_number, draw_date, jackpot_amount, winners, source) 
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, draw_number, draw_date, jackpot_amount, winners, source, created_at
-        """
-        
-        result = self.execute(query, (
-            draw_number, draw_date, jackpot_amount, winners, source
-        ))
-        
-        if not result:
+        except Exception as e:
+            logger.error(f"Error adding draw {draw_number}: {str(e)}")
             return None
-        
-        draw = result[0]
-        
-        # Insert individual numbers
-        number_params = []
-        for i, number in enumerate(white_balls):
-            number_params.append((draw["id"], i+1, number, False))
-        
-        # Insert powerball
-        number_params.append((draw["id"], 6, powerball, True))
-        
-        numbers_query = """
-        INSERT INTO numbers (draw_id, position, number, is_powerball)
-        VALUES %s
-        """
-        
-        self.execute_many(numbers_query, number_params)
-        
-        return draw
     
-    # Prediction operations
-    def add_prediction(self, white_balls: List[int], powerball: int, 
-                      method: str, confidence: float, rationale: str, 
-                      user_id: int = 1) -> Optional[Dict[str, Any]]:
+    def add_prediction(
+        self,
+        white_balls: List[int],
+        powerball: int,
+        method: str,
+        confidence: float,
+        rationale: str,
+        user_id: int = 1
+    ) -> Optional[Dict[str, Any]]:
         """Add a new prediction"""
         query = """
         INSERT INTO predictions 
@@ -350,21 +388,16 @@ class PostgresDB:
         RETURNING id
         """
         
-        result = self.execute(query, (
-            user_id, method, confidence, rationale
-        ))
+        result = self.execute(query, (user_id, method, confidence, rationale))
         
         if not result:
             return None
         
         pred_id = result[0]['id']
         
-        # Insert white balls
         number_params = []
         for i, number in enumerate(white_balls):
             number_params.append((pred_id, i+1, number, False))
-        
-        # Insert powerball
         number_params.append((pred_id, 6, powerball, True))
         
         numbers_query = """
@@ -374,31 +407,26 @@ class PostgresDB:
         
         self.execute_many(numbers_query, number_params)
         
-        # Update user stats
         self.update_user_stat(user_id, 'predictions_made')
         
-        # Get complete prediction
-        query = """
-        SELECT 
-            p.id, p.user_id, p.method, p.confidence, p.rationale, p.created_at,
-            array_agg(CASE WHEN pn.is_powerball = false THEN pn.number END ORDER BY pn.position) FILTER (WHERE pn.is_powerball = false) AS white_balls,
-            (array_agg(pn.number) FILTER (WHERE pn.is_powerball = true))[1] AS powerball
-        FROM 
-            predictions p
-        JOIN 
-            prediction_numbers pn ON p.id = pn.prediction_id
-        WHERE 
-            p.id = %s
-        GROUP BY 
-            p.id
-        """
-        
-        result = self.execute(query, (pred_id,))
-        return result[0] if result else None
+        return {
+            'id': pred_id,
+            'user_id': user_id,
+            'white_balls': white_balls,
+            'powerball': powerball,
+            'method': method,
+            'confidence': confidence,
+            'rationale': rationale,
+            'created_at': datetime.now().isoformat()
+        }
     
-    def get_predictions(self, method: Optional[str] = None, 
-                      user_id: Optional[int] = None,
-                      limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_predictions(
+        self,
+        method: Optional[str] = None,
+        user_id: Optional[int] = None,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
         """Get predictions with filtering"""
         query = """
         SELECT 
@@ -433,7 +461,6 @@ class PostgresDB:
         result = self.execute(query, tuple(params))
         return result if result else []
     
-    # User stats operations
     def get_user_stats(self, user_id: int = 1) -> Dict[str, Any]:
         """Get stats for a user"""
         query = """
@@ -443,7 +470,6 @@ class PostgresDB:
         result = self.execute(query, (user_id,))
         
         if not result:
-            # Create default stats for user
             insert_query = """
             INSERT INTO user_stats (user_id)
             VALUES (%s)
@@ -478,10 +504,16 @@ class PostgresDB:
         self.execute(query, (user_id,))
         return True
     
-    # Check numbers operations
-    def add_user_check(self, user_id: int, draw_id: int, numbers: List[int],
-                      white_matches: List[int], powerball_match: bool,
-                      is_winner: bool, prize: str) -> Optional[Dict[str, Any]]:
+    def add_user_check(
+        self,
+        user_id: int,
+        draw_id: str,
+        numbers: List[int],
+        white_matches: List[int],
+        powerball_match: bool,
+        is_winner: bool,
+        prize: str
+    ) -> Optional[Dict[str, Any]]:
         """Add a user number check"""
         query = """
         INSERT INTO user_checks
@@ -495,7 +527,6 @@ class PostgresDB:
         ))
         
         if result:
-            # Update user stats
             self.update_user_stat(user_id, 'checks_performed')
             if is_winner:
                 self.update_user_stat(user_id, 'wins')
@@ -507,19 +538,13 @@ class PostgresDB:
         query = """
         SELECT 
             uc.*, 
-            d.draw_number, d.draw_date,
-            array_agg(CASE WHEN n.is_powerball = false THEN n.number END ORDER BY n.position) FILTER (WHERE n.is_powerball = false) AS white_balls,
-            (array_agg(n.number) FILTER (WHERE n.is_powerball = true))[1] AS powerball
+            d.draw_number, d.draw_date, d.white_balls, d.powerball
         FROM 
             user_checks uc
         JOIN 
             draws d ON uc.draw_id = d.id
-        JOIN 
-            numbers n ON d.id = n.draw_id
         WHERE 
             uc.user_id = %s
-        GROUP BY 
-            uc.id, d.draw_number, d.draw_date
         ORDER BY 
             uc.created_at DESC
         LIMIT %s OFFSET %s
@@ -528,22 +553,19 @@ class PostgresDB:
         result = self.execute(query, (user_id, limit, offset))
         return result if result else []
     
-    # Analysis operations
     def get_frequency_analysis(self) -> Dict[str, Dict[str, int]]:
         """Get frequency analysis of numbers"""
         white_query = """
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = FALSE
-        GROUP BY number
+        SELECT unnest(white_balls) as number, COUNT(*) as count
+        FROM draws
+        GROUP BY unnest(white_balls)
         ORDER BY number
         """
         
         powerball_query = """
-        SELECT number, COUNT(*) as count
-        FROM numbers
-        WHERE is_powerball = TRUE
-        GROUP BY number
+        SELECT powerball as number, COUNT(*) as count
+        FROM draws
+        GROUP BY powerball
         ORDER BY number
         """
         
@@ -564,8 +586,12 @@ class PostgresDB:
             "powerballs": pb_freq
         }
     
-    def save_analysis_result(self, analysis_type: str, result_data: Dict[str, Any], 
-                           parameters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    def save_analysis_result(
+        self,
+        analysis_type: str,
+        result_data: Dict[str, Any],
+        parameters: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
         """Save an analysis result"""
         query = """
         INSERT INTO analysis_results (type, parameters, result_data)
@@ -575,14 +601,13 @@ class PostgresDB:
         
         result = self.execute(query, (
             analysis_type, 
-            psycopg2.extras.Json(parameters) if parameters else None,
-            psycopg2.extras.Json(result_data)
+            json.dumps(parameters) if parameters else None,
+            json.dumps(result_data)
         ))
         
         return result[0] if result else None
     
-    def get_analysis_results(self, analysis_type: str, 
-                           limit: int = 1) -> List[Dict[str, Any]]:
+    def get_analysis_results(self, analysis_type: str, limit: int = 1) -> List[Dict[str, Any]]:
         """Get recent analysis results of a specific type"""
         query = """
         SELECT *
@@ -595,9 +620,14 @@ class PostgresDB:
         result = self.execute(query, (analysis_type, limit))
         return result if result else []
     
-    # Expected combinations operations
-    def add_expected_combination(self, white_balls: List[int], powerball: int,
-                              score: float, method: str, reason: str) -> Optional[Dict[str, Any]]:
+    def add_expected_combination(
+        self,
+        white_balls: List[int],
+        powerball: int,
+        score: float,
+        method: str,
+        reason: str
+    ) -> Optional[Dict[str, Any]]:
         """Add an expected combination"""
         query = """
         INSERT INTO expected_combinations (score, method, reason)
@@ -609,9 +639,6 @@ class PostgresDB:
         
         if result:
             combo_id = result[0]['id']
-            
-            # Would add numbers here, but for simplicity we're storing them in the view
-            
             return {
                 'id': combo_id,
                 'white_balls': white_balls,
@@ -648,8 +675,6 @@ _db_instance = None
 def get_db() -> PostgresDB:
     """Get the database singleton instance"""
     global _db_instance
-    
     if _db_instance is None:
         _db_instance = PostgresDB()
-    
     return _db_instance

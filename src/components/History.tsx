@@ -1,9 +1,72 @@
+// src/components/History.tsx
 import React, { useState, useEffect } from 'react';
 import { Calendar, Search, Filter, Trophy, Check, X } from 'lucide-react';
-import { getDraws } from '../lib/api';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
+
+// Assume getDraws implementation
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+const getDraws = async (limit: number, offset: number) => {
+  try {
+    console.log("Fetching draws from:", `${API_URL}/api/draws?limit=${limit}&offset=${offset}`);
+    const response = await fetch(`${API_URL}/api/draws?limit=${limit}&offset=${offset}`, {
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+    return await response.json();
+  } catch (err) {
+    console.error("getDraws error:", err);
+    throw err;
+  }
+};
+
+// Data utility functions (stubs based on usage)
+const safelyParseNumber = (value: any, defaultValue: number): number => {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+  return defaultValue;
+};
+
+const isValidArray = (arr: any): boolean => {
+  return Array.isArray(arr) && arr.every(item => typeof item === 'number');
+};
+
+const processWhiteBalls = (whiteBalls: any): number[] => {
+  try {
+    if (isValidArray(whiteBalls)) {
+      return whiteBalls.slice(0, 5);
+    }
+    if (typeof whiteBalls === 'string') {
+      // Handle PostgreSQL array format, e.g., "{15,44,63,66,69}"
+      const cleaned = whiteBalls.replace(/[{}]/g, '');
+      const numbers = cleaned.split(',').map(num => parseInt(num.trim(), 10)).filter(num => !isNaN(num));
+      if (numbers.length === 5) return numbers;
+    }
+    console.warn("Invalid white_balls format:", whiteBalls);
+    return [1, 2, 3, 4, 5]; // Fallback
+  } catch (err) {
+    console.error("Error processing white_balls:", err);
+    return [1, 2, 3, 4, 5];
+  }
+};
+
+const processPowerball = (powerball: any): number => {
+  try {
+    const parsed = safelyParseNumber(powerball, 1);
+    return parsed >= 1 && parsed <= 26 ? parsed : 1;
+  } catch (err) {
+    console.error("Error processing powerball:", err);
+    return 1;
+  }
+};
 
 interface Draw {
   id: string;
@@ -22,32 +85,66 @@ const History = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalDraws, setTotalDraws] = useState(0);
   const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
   const [isMarkingWinner, setIsMarkingWinner] = useState(false);
 
   // Items per page
-  const itemsPerPage = 10;
+  const itemsPerPage = 20;
 
   useEffect(() => {
     fetchDraws();
-  }, []);
+  }, [page]);
 
   const fetchDraws = async () => {
     setLoading(true);
     setError(null);
     
     try {
-      const response = await getDraws();
+      const response = await getDraws(itemsPerPage, (page - 1) * itemsPerPage);
+      
+      console.log('Raw API response:', response);
       
       if (response && response.draws) {
-        setDraws(response.draws);
-        setTotalPages(Math.ceil(response.draws.length / itemsPerPage));
+        if (response.draws.length > 0) {
+          const firstDraw = response.draws[0];
+          console.log('First draw from API:', firstDraw);
+          console.log('white_balls type:', typeof firstDraw.white_balls);
+          console.log('white_balls value:', firstDraw.white_balls);
+        }
+        
+        const processedDraws = response.draws.map((draw: any) => {
+          const whiteBalls = processWhiteBalls(draw.white_balls);
+          const powerball = processPowerball(draw.powerball);
+          
+          console.log('Processed white balls:', whiteBalls);
+          console.log('Processed powerball:', powerball);
+          
+          return {
+            id: draw.id.toString(),
+            draw_number: safelyParseNumber(draw.draw_number, 1),
+            draw_date: draw.draw_date || 'Unknown',
+            white_balls: whiteBalls,
+            powerball: powerball,
+            jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
+            winners: safelyParseNumber(draw.winners, 0),
+          };
+        });
+        
+        setDraws(processedDraws);
+        setTotalDraws(response.count || processedDraws.length);
+        console.log('Processed draws total:', processedDraws.length);
+        if (processedDraws.length > 0) {
+          console.log('First processed draw:', processedDraws[0]);
+        }
       } else {
-        setError('Failed to fetch draws');
+        throw new Error('Failed to fetch draws or no draws found');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch draws');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch draws';
+      console.error('Error fetching draws:', err);
+      setError(errorMessage);
+      showToast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -74,11 +171,9 @@ const History = () => {
     setSelectedDraw(drawId);
     
     try {
-      // Simulating API call to update the winner status
-      // In a real implementation, you would make an API call here
+      // Placeholder for API call to update winner status
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Update local state
       setDraws(prevDraws => 
         prevDraws.map(draw => 
           draw.id === drawId 
@@ -104,21 +199,19 @@ const History = () => {
   const filteredDraws = draws.filter(draw => {
     const matchesSearch = searchTerm === '' || 
       draw.draw_number.toString().includes(searchTerm) ||
-      draw.white_balls.some(ball => ball.toString().includes(searchTerm)) ||
+      draw.white_balls.some((ball: number) => ball.toString().includes(searchTerm)) ||
       draw.powerball.toString().includes(searchTerm);
     
-    const matchesDate = dateFilter === '' || draw.draw_date === dateFilter;
+    const matchesDate = dateFilter === '' || draw.draw_date.includes(dateFilter);
     
     return matchesSearch && matchesDate;
   });
 
   // Calculate pagination
-  const paginatedDraws = filteredDraws.slice(
-    (page - 1) * itemsPerPage,
-    page * itemsPerPage
-  );
-  
-  const totalFilteredPages = Math.ceil(filteredDraws.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredDraws.length / itemsPerPage));
+  const startIndex = (page - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedDraws = filteredDraws.slice(startIndex, endIndex);
 
   if (loading) {
     return (
@@ -147,7 +240,10 @@ const History = () => {
     <div className="space-y-6">
       <section className="bg-white rounded-lg shadow-sm p-6">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
+          <div className="flex items-center space-x-2">
+            <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
+            <span className="text-sm text-gray-500">({totalDraws} total draws)</span>
+          </div>
           <div className="flex items-center space-x-4">
             <div className="relative">
               <input
@@ -224,7 +320,7 @@ const History = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
-                          {draw.white_balls.map((number, idx) => (
+                          {draw.white_balls.map((number: number, idx: number) => (
                             <NumberBall
                               key={idx}
                               number={number}
@@ -295,23 +391,46 @@ const History = () => {
 
             <div className="mt-6 flex items-center justify-between">
               <div className="text-sm text-gray-500">
-                Showing {Math.min(filteredDraws.length, 1 + (page - 1) * itemsPerPage)} to {Math.min(filteredDraws.length, page * itemsPerPage)} of {filteredDraws.length} results
+                Showing {startIndex + 1} to {Math.min(endIndex, filteredDraws.length)} of {filteredDraws.length} results
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setPage(prev => Math.max(prev - 1, 1))}
-                  disabled={page === 1}
-                  className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage(prev => Math.min(prev + 1, totalFilteredPages))}
-                  disabled={page >= totalFilteredPages}
-                  className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setPage(1)}
+                    disabled={page === 1}
+                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    First
+                  </button>
+                  <button
+                    onClick={() => setPage(prev => Math.max(prev - 1, 1))}
+                    disabled={page === 1}
+                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                </div>
+                
+                <div className="text-sm text-gray-700">
+                  Page {page} of {totalPages || 1}
+                </div>
+                
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setPage(prev => Math.min(prev + 1, totalPages || 1))}
+                    disabled={page >= totalPages}
+                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                  <button
+                    onClick={() => setPage(totalPages || 1)}
+                    disabled={page === totalPages || totalPages === 0}
+                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Last
+                  </button>
+                </div>
               </div>
             </div>
           </>

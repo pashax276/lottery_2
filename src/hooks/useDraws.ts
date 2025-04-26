@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
-import type { Database } from '../lib/database.types';
+import { getDraws } from '../lib/api';
 
-type Draw = Database['public']['Tables']['draws']['Row'];
+interface Draw {
+  id: string;
+  draw_number: number;
+  draw_date: string;
+  white_balls: number[];
+  powerball: number;
+  jackpot_amount: number;
+  winners: number;
+  source: string;
+  created_at: string;
+}
 
 export function useDraws() {
   const [draws, setDraws] = useState<Draw[]>([]);
@@ -12,18 +21,21 @@ export function useDraws() {
   useEffect(() => {
     async function fetchDraws() {
       try {
-        const { data, error } = await supabase
-          .from('draws')
-          .select('*')
-          .order('draw_date', { ascending: false });
-
-        if (error) {
-          throw error;
+        setLoading(true);
+        console.log('Fetching draws from API...');
+        
+        const response = await getDraws(1000, 0);
+        console.log('Raw draw data from API:', response);
+        
+        if (response.success && response.draws) {
+          setDraws(response.draws);
+        } else {
+          console.warn('No draws found in API response');
+          setDraws([]);
         }
-
-        setDraws(data);
       } catch (e) {
-        setError(e.message);
+        console.error('Error in fetchDraws:', e);
+        setError(e instanceof Error ? e.message : 'An error occurred fetching draws');
       } finally {
         setLoading(false);
       }

@@ -28,7 +28,8 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
     processed: number;
     success: number;
     failed: number;
-  }>({ total: 0, processed: 0, success: 0, failed: 0 });
+    errors: string[];
+  }>({ total: 0, processed: 0, success: 0, failed: 0, errors: [] });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -60,10 +61,8 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
   }, []);
 
   const handleFiles = (newFiles: File[]) => {
-    // Clear previous success message
     setSuccessMessage(null);
     
-    // Filter for only text and CSV files
     const validFiles = newFiles.filter(file => 
       file.type === 'text/plain' || 
       file.type === 'text/csv' || 
@@ -83,17 +82,15 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
 
   const removeFile = (index: number) => {
     setFiles(prev => prev.filter((_, i) => i !== index));
-    // Clear success message when removing files
     setSuccessMessage(null);
   };
 
   const clearFiles = () => {
     setFiles([]);
-    setProcessingStatus({ total: 0, processed: 0, success: 0, failed: 0 });
+    setProcessingStatus({ total: 0, processed: 0, success: 0, failed: 0, errors: [] });
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    // Clear success message when clearing files
     setSuccessMessage(null);
   };
 
@@ -106,28 +103,21 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
           const content = e.target?.result as string;
           const draws: DrawData[] = [];
           
-          // Determine file type and process accordingly
           if (file.name.endsWith('.csv')) {
-            // Process as CSV
             const lines = content.split('\n').filter(line => line.trim() !== '');
-            
-            // Skip header if present (check if first line contains headers)
             const startIndex = lines[0].toLowerCase().includes('draw') ||
-                               lines[0].toLowerCase().includes('date') ||
-                               lines[0].toLowerCase().includes('number') ? 1 : 0;
+                              lines[0].toLowerCase().includes('date') ||
+                              lines[0].toLowerCase().includes('number') ? 1 : 0;
             
             for (let i = startIndex; i < lines.length; i++) {
               const line = lines[i].trim();
               const values = line.split(',').map(val => val.trim());
               
-              // Expected format: DrawNumber,Date,Number1,Number2,Number3,Number4,Number5,Powerball
               if (values.length >= 8) {
                 const drawNumber = parseInt(values[0], 10);
                 let drawDate = values[1];
                 
-                // Handle different date formats
                 if (!drawDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                  // Try to convert MM/DD/YYYY to YYYY-MM-DD
                   const dateParts = drawDate.split('/');
                   if (dateParts.length === 3) {
                     const month = dateParts[0].padStart(2, '0');
@@ -140,7 +130,6 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
                 const whiteBalls = values.slice(2, 7).map(val => parseInt(val, 10));
                 const powerball = parseInt(values[7], 10);
                 
-                // Optional jackpot amount and winners if present
                 const jackpotAmount = values[8] ? parseFloat(values[8]) : undefined;
                 const winners = values[9] ? parseInt(values[9], 10) : undefined;
                 
@@ -155,12 +144,9 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
               }
             }
           } else {
-            // Process as TXT
-            // Assume each line is a separate draw
             const lines = content.split('\n').filter(line => line.trim() !== '');
             
             for (const line of lines) {
-              // Try to determine format based on separators
               let values: string[];
               
               if (line.includes(',')) {
@@ -168,13 +154,9 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
               } else if (line.includes('\t')) {
                 values = line.split('\t').map(val => val.trim());
               } else if (line.includes(' ')) {
-                // Space-separated, but we need to be careful because dates might have spaces
                 const parts = line.split(' ').filter(part => part.trim() !== '');
                 
-                // Try to identify the format
                 if (parts.length >= 7) {
-                  // Assume format: DrawNumber Date Num1 Num2 Num3 Num4 Num5 PB
-                  // Handle date that might be multiple parts
                   let dateEndIndex = -1;
                   for (let i = 1; i < parts.length - 6; i++) {
                     if (!isNaN(parseInt(parts[i + 1], 10))) {
@@ -190,22 +172,20 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
                     
                     values = [drawNumber, drawDate, ...numbers];
                   } else {
-                    continue; // Can't determine format
+                    continue;
                   }
                 } else {
-                  continue; // Not enough parts
+                  continue;
                 }
               } else {
-                continue; // Can't determine format
+                continue;
               }
               
               if (values.length >= 8) {
                 const drawNumber = parseInt(values[0], 10);
                 let drawDate = values[1];
                 
-                // Handle different date formats
                 if (!drawDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                  // Try to convert MM/DD/YYYY to YYYY-MM-DD
                   const dateParts = drawDate.split('/');
                   if (dateParts.length === 3) {
                     const month = dateParts[0].padStart(2, '0');
@@ -251,30 +231,29 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
     setLoading(true);
     setError(null);
     setSuccessMessage(null);
-    setProcessingStatus({ total: 0, processed: 0, success: 0, failed: 0 });
+    setProcessingStatus({ total: 0, processed: 0, success: 0, failed: 0, errors: [] });
     
     try {
       let totalDraws = 0;
       let processedDraws = 0;
       let successfulDraws = 0;
       let failedDraws = 0;
+      let errorMessages: string[] = [];
       
-      // Process each file
       for (const file of files) {
         try {
           const draws = await processFile(file);
           totalDraws += draws.length;
           
-          // Update status
           setProcessingStatus(prev => ({
             ...prev,
-            total: totalDraws
+            total: totalDraws,
+            errors: []
           }));
           
-          // Process each draw
           for (const draw of draws) {
             try {
-              await addDraw(
+              const response = await addDraw(
                 draw.drawNumber,
                 draw.drawDate,
                 draw.whiteBalls,
@@ -283,28 +262,37 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
                 draw.winners
               );
               
-              successfulDraws++;
+              console.log(`API response for draw ${draw.drawNumber}:`, response);
+              
+              if (response.success && response.draw) {
+                successfulDraws++;
+              } else {
+                throw new Error(`API returned unsuccessful response: ${JSON.stringify(response)}`);
+              }
             } catch (error) {
               failedDraws++;
-              console.error(`Failed to add draw ${draw.drawNumber}:`, error);
+              const errorMsg = `Failed to add draw ${draw.drawNumber}: ${error instanceof Error ? error.message : String(error)}`;
+              errorMessages.push(errorMsg);
+              console.error(errorMsg);
             } finally {
               processedDraws++;
               
-              // Update status
               setProcessingStatus({
                 total: totalDraws,
                 processed: processedDraws,
                 success: successfulDraws,
-                failed: failedDraws
+                failed: failedDraws,
+                errors: errorMessages
               });
             }
           }
         } catch (error) {
-          setError(`Error processing file ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+          const fileError = `Error processing file ${file.name}: ${error instanceof Error ? error.message : String(error)}`;
+          setError(fileError);
+          errorMessages.push(fileError);
         }
       }
       
-      // Set success message (instead of redirecting)
       if (successfulDraws > 0) {
         const successMsg = `Successfully added ${successfulDraws} draw${successfulDraws > 1 ? 's' : ''} to the database`;
         setSuccessMessage(successMsg);
@@ -316,19 +304,23 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
       }
       
       if (failedDraws > 0) {
-        showToast.error(`Failed to add ${failedDraws} draw${failedDraws > 1 ? 's' : ''}`);
+        showToast.error(`Failed to add ${failedDraws} draw${failedDraws > 1 ? 's' : ''}. Check console for details.`);
       }
       
-      // Only clear files on success (but keep status visible)
       if (successfulDraws > 0 && failedDraws === 0) {
-        // Clear file inputs but keep success message
         setFiles([]);
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
       }
+      
+      if (errorMessages.length > 0) {
+        setError(errorMessages.join('; '));
+      }
     } catch (error) {
-      setError(`Error processing files: ${error instanceof Error ? error.message : String(error)}`);
+      const generalError = `Error processing files: ${error instanceof Error ? error.message : String(error)}`;
+      setError(generalError);
+      showToast.error(generalError);
     } finally {
       setLoading(false);
     }
@@ -476,6 +468,16 @@ const EnhancedFileUpload: React.FC<FileUploadProps> = ({ onSuccess }) => {
               </span>
             )}
           </div>
+          {processingStatus.errors.length > 0 && (
+            <div className="mt-2 text-xs text-red-600">
+              <p>Errors:</p>
+              <ul className="list-disc list-inside">
+                {processingStatus.errors.map((err, idx) => (
+                  <li key={idx}>{err}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 

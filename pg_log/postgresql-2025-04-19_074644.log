@@ -1,0 +1,167 @@
+2025-04-19 07:46:44.155 UTC [1] LOG:  starting PostgreSQL 14.17 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 14.2.0) 14.2.0, 64-bit
+2025-04-19 07:46:44.155 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2025-04-19 07:46:44.155 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2025-04-19 07:46:44.157 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2025-04-19 07:46:44.159 UTC [59] LOG:  database system was shut down at 2025-04-19 07:46:44 UTC
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  checkpoint record is at 0/1705EA0
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  redo record is at 0/1705EA0; shutdown true
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  next transaction ID: 735; next OID: 16385
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  next MultiXactId: 1; next MultiXactOffset: 0
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  oldest unfrozen transaction ID: 727, in database 1
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  oldest MultiXactId: 1, in database 1
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  commit timestamp Xid oldest/newest: 0/0
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  transaction ID wrap limit is 2147484374, limited by database with OID 1
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  starting up replication slots
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  xmin required by slots: data 0, catalog 0
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  MultiXactId wrap limit is 2147483648, limited by database with OID 1
+2025-04-19 07:46:44.159 UTC [59] DEBUG:  MultiXact member stop limit is now 4294914944 based on MultiXact 1
+2025-04-19 07:46:44.161 UTC [1] DEBUG:  starting background worker process "logical replication launcher"
+2025-04-19 07:46:44.161 UTC [63] DEBUG:  autovacuum launcher started
+2025-04-19 07:46:44.161 UTC [1] LOG:  database system is ready to accept connections
+2025-04-19 07:46:44.162 UTC [65] DEBUG:  logical replication launcher started
+2025-04-19 07:47:44.254 UTC [108] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:48:44.252 UTC [151] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:49:14.339 UTC [166] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:49:44.309 UTC [188] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:50:14.353 UTC [209] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:50:44.331 UTC [231] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:51:14.352 UTC [253] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:51:44.241 UTC [60] DEBUG:  performing replication slot checkpoint
+2025-04-19 07:51:44.365 UTC [275] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:52:14.388 UTC [297] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:52:44.380 UTC [319] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:53:14.391 UTC [341] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:53:44.377 UTC [363] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:54:14.439 UTC [385] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:54:44.396 UTC [407] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:54:46.744 UTC [408] LOG:  statement: set search_path to 'public';
+2025-04-19 07:54:46.747 UTC [408] LOG:  statement: SELECT
+	        a.pid AS "ID",
+	        query_start AS "Time",
+	        datname AS "db",
+	        CASE
+	        WHEN c.relname IS NOT NULL THEN c.relname
+	        ELSE l.virtualtransaction
+	        END AS "Target",
+	        l.mode AS "State",
+	        query AS "SQL"
+	      FROM
+	        pg_stat_activity a
+	        LEFT JOIN pg_locks l ON a.pid = l.pid
+	        LEFT JOIN pg_class c ON l.relation = c.oid
+	      ORDER BY
+	        a.pid ASC,
+	        c.relname ASC
+2025-04-19 07:54:46.794 UTC [408] LOG:  statement: SHOW ALL
+2025-04-19 07:54:46.800 UTC [408] LOG:  statement: SELECT
+	        'db_numbackends' AS db,
+	        pg_stat_get_db_numbackends(datid) AS status
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_xact_commit',
+	        pg_stat_get_db_xact_commit(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_xact_rollback',
+	        pg_stat_get_db_xact_rollback(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_blocks_fetched',
+	        pg_stat_get_db_blocks_fetched(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_blocks_hit',
+	        pg_stat_get_db_blocks_hit(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+2025-04-19 07:54:46.820 UTC [408] LOG:  statement: SELECT
+	        a.pid AS "ID",
+	        query_start AS "Time",
+	        datname AS "db",
+	        CASE
+	        WHEN c.relname IS NOT NULL THEN c.relname
+	        ELSE l.virtualtransaction
+	        END AS "Target",
+	        l.mode AS "State",
+	        query AS "SQL"
+	      FROM
+	        pg_stat_activity a
+	        LEFT JOIN pg_locks l ON a.pid = l.pid
+	        LEFT JOIN pg_class c ON l.relation = c.oid
+	      ORDER BY
+	        a.pid ASC,
+	        c.relname ASC
+2025-04-19 07:54:46.822 UTC [408] LOG:  statement: SHOW ALL
+2025-04-19 07:54:46.825 UTC [408] LOG:  statement: SELECT
+	        'db_numbackends' AS db,
+	        pg_stat_get_db_numbackends(datid) AS status
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_xact_commit',
+	        pg_stat_get_db_xact_commit(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_xact_rollback',
+	        pg_stat_get_db_xact_rollback(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_blocks_fetched',
+	        pg_stat_get_db_blocks_fetched(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+	      UNION ALL
+	      SELECT
+	        'db_blocks_hit',
+	        pg_stat_get_db_blocks_hit(datid)
+	      FROM
+	        pg_stat_database
+	      WHERE
+	        datname = current_database()
+2025-04-19 07:55:14.458 UTC [430] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:55:44.412 UTC [452] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:56:14.458 UTC [473] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:56:44.429 UTC [60] DEBUG:  checkpoint skipped because system is idle
+2025-04-19 07:56:44.430 UTC [495] DEBUG:  autovacuum: processing database "powerball"
+2025-04-19 07:57:14.542 UTC [517] DEBUG:  autovacuum: processing database "postgres"
+2025-04-19 07:57:33.516 UTC [1] LOG:  received fast shutdown request
+2025-04-19 07:57:33.531 UTC [1] LOG:  aborting any active transactions
+2025-04-19 07:57:33.532 UTC [408] FATAL:  terminating connection due to administrator command
+2025-04-19 07:57:33.532 UTC [63] DEBUG:  autovacuum launcher shutting down
+2025-04-19 07:57:33.532 UTC [65] DEBUG:  logical replication launcher shutting down
+2025-04-19 07:57:33.567 UTC [1] LOG:  background worker "logical replication launcher" (PID 65) exited with exit code 1
+2025-04-19 07:57:33.568 UTC [60] LOG:  shutting down
+2025-04-19 07:57:33.573 UTC [60] DEBUG:  performing replication slot checkpoint
+2025-04-19 07:57:33.591 UTC [1] LOG:  database system is shut down

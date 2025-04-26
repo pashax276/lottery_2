@@ -24,6 +24,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
+      - DEBUG_NO_FALLBACK=true
       - PORT=5001
       - LOG_LEVEL=info
       - SECRET_KEY=powerball_secret_key_change_in_production
@@ -38,12 +39,6 @@ services:
     volumes:
       - backend-data:/app/data
     restart: unless-stopped
-    command: >
-      bash -c "
-        python main.py &
-        sleep 15 &&
-        python register_admin.py
-      "
 
   db:
     image: postgres:14-alpine
@@ -58,7 +53,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U powerball"]
+      test: ["CMD-SHELL", "pg_isready -U powerball -d powerball"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -84,3 +79,4 @@ networks:
 volumes:
   backend-data:
   postgres-data:
+    name: powerball_postgres_data  # Explicitly name the volume

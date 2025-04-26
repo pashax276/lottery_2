@@ -1,3 +1,5 @@
+// src/components/Dashboard.tsx
+
 import React, { useState, useEffect } from 'react';
 import { ArrowUpRight, TrendingUp, Users, DollarSign, Calendar } from 'lucide-react';
 import { getDraws, getLatestDraw } from '../lib/api';
@@ -18,12 +20,11 @@ const Dashboard = () => {
   const [latestDraws, setLatestDraws] = useState<Draw[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  const stats = [
+  const [stats, setStats] = useState([
     { label: 'Total Draws', value: '0', icon: TrendingUp, trend: '+0%' },
     { label: 'Winners', value: '0', icon: Users, trend: '+0%' },
     { label: 'Latest Jackpot', value: '$0', icon: DollarSign, trend: '+0%' },
-  ];
+  ]);
 
   useEffect(() => {
     fetchDraws();
@@ -44,11 +45,35 @@ const Dashboard = () => {
         // Update stats
         const totalDraws = result.draws.length;
         const winners = result.draws.filter(draw => draw.winners > 0).length;
+        
+        // Get the latest jackpot amount
         const latestJackpot = result.draws[0]?.jackpot_amount || 0;
         
-        stats[0].value = totalDraws.toString();
-        stats[1].value = winners.toString();
-        stats[2].value = `${latestJackpot.toLocaleString()}`;
+        // Format jackpot with appropriate suffix
+        let jackpotDisplay = '$0';
+        if (latestJackpot >= 1_000_000_000) {
+          jackpotDisplay = `$${(latestJackpot / 1_000_000_000).toFixed(1)}B`;
+        } else if (latestJackpot >= 1_000_000) {
+          jackpotDisplay = `$${(latestJackpot / 1_000_000).toFixed(1)}M`;
+        } else if (latestJackpot > 0) {
+          jackpotDisplay = `$${latestJackpot.toLocaleString()}`;
+        }
+        
+        // Calculate jackpot growth trend
+        let jackpotTrend = '+0%';
+        if (result.draws.length >= 2) {
+          const previousJackpot = result.draws[1]?.jackpot_amount || 0;
+          if (previousJackpot > 0 && latestJackpot > previousJackpot) {
+            const growthPercent = ((latestJackpot - previousJackpot) / previousJackpot) * 100;
+            jackpotTrend = `+${growthPercent.toFixed(0)}%`;
+          }
+        }
+        
+        setStats([
+          { label: 'Total Draws', value: totalDraws.toString(), icon: TrendingUp, trend: '+0%' },
+          { label: 'Winners', value: winners.toString(), icon: Users, trend: '+0%' },
+          { label: 'Latest Jackpot', value: jackpotDisplay, icon: DollarSign, trend: jackpotTrend },
+        ]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch draws');
@@ -114,7 +139,7 @@ const Dashboard = () => {
               <p className="text-sm text-gray-500">Jackpot</p>
               <p className="text-lg font-medium text-gray-900">
                 {latestDraws[0].jackpot_amount 
-                  ? `${latestDraws[0].jackpot_amount.toLocaleString()}` 
+                  ? formatJackpot(latestDraws[0].jackpot_amount)
                   : 'N/A'}
               </p>
             </div>
@@ -213,7 +238,7 @@ const Dashboard = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {draw.jackpot_amount ? `${draw.jackpot_amount.toLocaleString()}` : 'N/A'}
+                      {draw.jackpot_amount ? formatJackpot(draw.jackpot_amount) : 'N/A'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {draw.winners > 0 ? (
@@ -236,5 +261,16 @@ const Dashboard = () => {
     </div>
   );
 };
+
+// Helper function to format jackpot amount
+function formatJackpot(amount: number): string {
+  if (amount >= 1_000_000_000) {
+    return `$${(amount / 1_000_000_000).toFixed(1)}B`;
+  } else if (amount >= 1_000_000) {
+    return `$${(amount / 1_000_000).toFixed(1)}M`;
+  } else {
+    return `$${amount.toLocaleString()}`;
+  }
+}
 
 export default Dashboard;

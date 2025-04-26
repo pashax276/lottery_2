@@ -1,5 +1,5 @@
 import logging
-from database import DatabaseConnector
+from db import get_db  # Changed from 'database' to 'db'
 from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_fixed
 import os
