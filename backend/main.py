@@ -125,7 +125,7 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allow all origins temporarily for debugging
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -319,7 +319,7 @@ async def add_draw(
     # Get user ID by awaiting the current_user coroutine
     user_id = 1
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", 1)
     
@@ -365,7 +365,7 @@ async def check_numbers(
     # Get user ID
     user_id = 1
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", 1)
     
@@ -455,9 +455,7 @@ async def check_numbers(
 
 # Scraping endpoints
 @app.post("/api/scrape/latest")
-
 async def scrape_latest(background_tasks: BackgroundTasks):
-    # Remove the dependency entirely
     scraper = PowerballScraper()
     db = get_db()
     
@@ -474,17 +472,19 @@ async def scrape_latest(background_tasks: BackgroundTasks):
         if existing_draw:
             return {"success": True, "message": "Draw already exists", "draw": existing_draw}
         
-        # Add to database
-        new_draw = db.add_draw(
-            draw_number=draw_data['draw_number'],
-            draw_date=draw_data['draw_date'],
-            white_balls=draw_data['white_balls'],
-            powerball=draw_data['powerball'],
-            jackpot_amount=draw_data.get('jackpot_amount', 0),
-            winners=draw_data.get('winners', 0),
-            source=draw_data.get('source', 'api'),
-            prize_breakdown=draw_data.get('prize_breakdown')
-        )
+        # Make sure we're only passing expected parameters
+        add_draw_params = {
+            'draw_number': draw_data['draw_number'],
+            'draw_date': draw_data['draw_date'],
+            'white_balls': draw_data['white_balls'],
+            'powerball': draw_data['powerball'],
+            'jackpot_amount': draw_data.get('jackpot_amount', 0),
+            'winners': draw_data.get('winners', 0),
+            'source': draw_data.get('source', 'api')
+        }
+        
+        # Add to database with filtered parameters
+        new_draw = db.add_draw(**add_draw_params)
         
         if not new_draw:
             raise HTTPException(status_code=500, detail="Failed to add draw to database")
@@ -554,7 +554,7 @@ async def generate_prediction(
     
     user_id = 1
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", 1)
     
@@ -591,7 +591,7 @@ async def get_predictions(
     
     user_id = None
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", None)
     
@@ -841,7 +841,7 @@ async def get_user_statistics(
     
     user_id = 1
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", 1)
     
@@ -859,7 +859,7 @@ async def get_user_checks(
     
     user_id = 1
     if current_user:
-        user = await current_user  # Await the coroutine
+        user = await current_user
         if user:
             user_id = user.get("id", 1)
     

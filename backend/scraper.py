@@ -156,56 +156,46 @@ class PowerballScraper:
     def _parse_ca_api_draw(self, draw_data: Dict[str, Any]) -> Dict[str, Any]:
         """Parse draw data from the California Lottery API"""
         try:
-            draw_number = int(draw_data['DrawNumber'])
-            draw_date = draw_data['DrawDate'].split('T')[0]
+            # Handle case variations for draw number
+            draw_number = int(draw_data.get('DrawNumber', draw_data.get('drawNumber', 0)))
+            if draw_number == 0:
+                raise ValueError("Invalid draw number")
             
+            # Parse draw date
+            draw_date = draw_data.get('DrawDate', '')
+            if 'T' in draw_date:
+                draw_date = draw_date.split('T')[0]  # Extract YYYY-MM-DD
+            elif '/' in draw_date:
+                month, day, year = draw_date.split('/')
+                draw_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            else:
+                raise ValueError("Invalid date format")
+            
+            # Parse winning numbers
+            winning_numbers = draw_data.get('WinningNumbers', {})
             white_balls = []
             powerball = 0
             for i in range(5):
-                white_balls.append(int(draw_data['WinningNumbers'][str(i)]['Number']))
-            powerball = int(draw_data['WinningNumbers']['5']['Number'])
+                if str(i) in winning_numbers:
+                    white_balls.append(int(winning_numbers[str(i)]['Number']))
+                else:
+                    raise ValueError(f"Missing white ball {i}")
+            if '5' in winning_numbers and winning_numbers['5'].get('IsSpecial', False):
+                powerball = int(winning_numbers['5']['Number'])
+            else:
+                raise ValueError("Missing powerball")
             
+            # Parse jackpot amount
             jackpot_amount = 0
+            prizes = draw_data.get('Prizes', {})
+            if '1' in prizes and 'Amount' in prizes['1']:
+                jackpot_amount = float(prizes['1']['Amount'])
+            
+            # Parse winners
             winners = 0
-            prize_breakdown = []
+            if '1' in prizes and 'Count' in prizes['1']:
+                winners = int(prizes['1']['Count'])
             
-            if 'Prizes' in draw_data and isinstance(draw_data['Prizes'], dict):
-                prize_tiers = [
-                    {"name": "5 + Powerball", "key": "1"},
-                    {"name": "5", "key": "2"},
-                    {"name": "4 + Powerball", "key": "3"},
-                    {"name": "4", "key": "4"},
-                    {"name": "3 + Powerball", "key": "5"},
-                    {"name": "3", "key": "6"},
-                    {"name": "2 + Powerball", "key": "7"},
-                    {"name": "1 + Powerball", "key": "8"},
-                    {"name": "Powerball", "key": "9"}
-                ]
-                
-                for tier in prize_tiers:
-                    if tier["key"] in draw_data['Prizes']:
-                        prize_info = draw_data['Prizes'][tier["key"]]
-                        prize_breakdown.append({
-                            "tier": tier["name"],
-                            "winners": prize_info.get("Count", 0),
-                            "prize": prize_info.get("Amount", "$0")
-                        })
-                        
-                        if tier["key"] == "1" and "Amount" in prize_info:
-                            try:
-                                jackpot_str = str(prize_info["Amount"]).replace("$", "").replace(",", "")
-                                jackpot_amount = float(jackpot_str)
-                            except ValueError:
-                                pass
-                        
-                        if tier["key"] == "1" and "Count" in prize_info:
-                            try:
-                                winners = int(prize_info["Count"])
-                            except ValueError:
-                                pass
-            
-            total_winners = sum(int(prize["winners"]) for prize in prize_breakdown)
-                
             return {
                 'draw_number': draw_number,
                 'draw_date': draw_date,
@@ -213,14 +203,24 @@ class PowerballScraper:
                 'powerball': powerball,
                 'jackpot_amount': jackpot_amount,
                 'winners': winners,
-                'prize_breakdown': prize_breakdown,
-                'total_winners': total_winners,
                 'source': 'ca_api'
             }
         
         except Exception as e:
             logger.error(f"Error parsing CA API draw: {str(e)}")
-            return None
+            logger.error(f"Raw draw data: {json.dumps(draw_data)}")
+            
+            # Return fallback result
+            return {
+                'draw_number': draw_data.get('DrawNumber', draw_data.get('drawNumber', 0)),
+                'draw_date': draw_data.get('DrawDate', '1970-01-01').split('T')[0],
+                'white_balls': [0, 0, 0, 0, 0],
+                'powerball': 0,
+                'jackpot_amount': 0,
+                'winners': 0,
+                'source': 'ca_api',
+                'parse_error': str(e)
+            }
     
     @retry(
         stop=stop_after_attempt(3),
@@ -533,12 +533,12 @@ class PowerballScraper:
                 return None
             
             date_elem = draw_elem.select_one('.draw-date')
-            draw_date = datetime.now().strftime("%Y-%m-%d")
+            draw_date = datetime.now().strftime("%Y-%m-DD")
             if date_elem:
                 date_str = date_elem.text.strip()
                 try:
                     date_obj = datetime.strptime(date_str, "%B %d, %Y")
-                    draw_date = date_obj.strftime("%Y-%m-%d")
+                    draw_date = date_obj.strftime("%Y-%m-DD")
                 except ValueError:
                     pass
             
@@ -590,7 +590,7 @@ class PowerballScraper:
     def _generate_mock_draw(self) -> Dict[str, Any]:
         """Generate a mock draw for testing or when all fetch methods fail"""
         today = datetime.now()
-        draw_date = today.strftime("%Y-%m-%d")
+        draw_date = today.strftime("%Y-%m-DD")
         
         draw_number = (self.latest_draw_number + 1) if self.latest_draw_number > 0 else random.randint(1000, 2000)
         
@@ -616,7 +616,7 @@ class PowerballScraper:
         
         for i in range(count):
             days_back = i * random.randint(3, 4)
-            draw_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%d")
+            draw_date = (today - timedelta(days=days_back)).strftime("%Y-%m-DD")
             draw_number = start_draw_number - i
             white_balls = sorted(random.sample(range(1, 70), 5))
             powerball = random.randint(1, 26)
@@ -657,110 +657,5 @@ class PowerballScraper:
                 draw['source'] = f"{draw['source']}_enhanced"
         except Exception as e:
             logger.error(f"Error enhancing draw with details: {str(e)}")
-        
-        return draw    
-
-    def add_draw(self, 
-             draw_number: int, 
-             draw_date: str, 
-             white_balls: List[int], 
-             powerball: int, 
-             jackpot_amount: float = 0, 
-             winners: int = 0,
-             source: str = 'api', 
-             prize_breakdown: List[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-        """Add a new draw"""
-        # Check if draw already exists
-        if self.get_draw_by_number(draw_number):
-            logger.warning(f"Draw {draw_number} already exists")
-            return None
-        
-        # Insert draw
-        query = """
-        INSERT INTO draws 
-        (draw_number, draw_date, jackpot_amount, winners, source) 
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, draw_number, draw_date, jackpot_amount, winners, source, created_at
-        """
-        
-        result = self.execute(query, (
-            draw_number, draw_date, jackpot_amount, winners, source
-        ))
-        
-        if not result:
-            return None
-        
-        draw = result[0]
-        
-        # Insert individual numbers
-        number_params = []
-        for i, number in enumerate(white_balls):
-            number_params.append((draw["id"], i+1, number, False))
-        
-        # Insert powerball
-        number_params.append((draw["id"], 6, powerball, True))
-        
-        numbers_query = """
-        INSERT INTO numbers (draw_id, position, number, is_powerball)
-        VALUES %s
-        """
-        
-        self.execute_many(numbers_query, number_params)
-        
-        # Insert prize breakdown if provided
-        if prize_breakdown:
-            try:
-                # Check if the prize_breakdowns table exists
-                check_table_query = """
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_name = 'prize_breakdowns'
-                )
-                """
-                table_exists_result = self.execute(check_table_query)
-                table_exists = table_exists_result[0]['exists'] if table_exists_result else False
-                
-                if not table_exists:
-                    # Create the table if it doesn't exist
-                    create_table_query = """
-                    CREATE TABLE prize_breakdowns (
-                        id SERIAL PRIMARY KEY,
-                        draw_id INTEGER REFERENCES draws(id) ON DELETE CASCADE,
-                        tier TEXT NOT NULL,
-                        winners INTEGER NOT NULL DEFAULT 0,
-                        prize TEXT NOT NULL,
-                        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                    )
-                    """
-                    self.execute(create_table_query)
-                    
-                    # Create index
-                    self.execute("CREATE INDEX idx_prize_breakdowns_draw_id ON prize_breakdowns(draw_id)")
-                
-                # Insert prize breakdown entries
-                for prize in prize_breakdown:
-                    # Convert winners to integer if it's a string
-                    winners_count = prize.get('winners', 0)
-                    if isinstance(winners_count, str):
-                        try:
-                            winners_count = int(winners_count)
-                        except ValueError:
-                            winners_count = 0
-                    
-                    prize_query = """
-                    INSERT INTO prize_breakdowns (draw_id, tier, winners, prize)
-                    VALUES (%s, %s, %s, %s)
-                    """
-                    self.execute(prize_query, (
-                        draw["id"], 
-                        prize.get('tier', ''), 
-                        winners_count, 
-                        prize.get('prize', '$0')
-                    ))
-                
-                logger.info(f"Added prize breakdown for draw #{draw_number}")
-                    
-            except Exception as e:
-                logger.error(f"Error saving prize breakdown: {str(e)}")
         
         return draw

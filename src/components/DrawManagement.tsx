@@ -24,6 +24,7 @@ const DrawManagement = () => {
     setSuccess(null);
 
     try {
+      console.log("Using API URL:", API_URL);
       console.log("Scraping API at:", `${API_URL}/api/scrape/latest`);
       
       const response = await fetch(`${API_URL}/api/scrape/latest`, {
@@ -35,7 +36,7 @@ const DrawManagement = () => {
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(errorText || 'Failed to scrape data');
+        throw new Error(`Failed to scrape data: ${response.status} ${response.statusText} - ${errorText}`);
       }
 
       const result = await response.json();
@@ -47,8 +48,9 @@ const DrawManagement = () => {
         throw new Error(result.error || 'Failed to scrape data');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      showToast.error(err instanceof Error ? err.message : 'Failed to scrape data');
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setError(errorMessage);
+      showToast.error(errorMessage);
       console.error("Scraping error:", err);
     } finally {
       setLoading(false);

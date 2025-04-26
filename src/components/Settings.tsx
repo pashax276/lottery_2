@@ -1,12 +1,9 @@
 import React from 'react';
 import { Bell, Shield } from 'lucide-react';
-import ManualScraper from './ManualScraper';
 
 const Settings = () => {
   return (
     <div className="space-y-6">
-      <ManualScraper />
-
       <section className="bg-white rounded-lg shadow-sm p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-6">Application Settings</h2>
 
