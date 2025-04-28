@@ -1,309 +1,262 @@
+# db.py
 import os
 import logging
 import psycopg2
-from psycopg2.extras import RealDictCursor, execute_values
+from psycopg2.extras import RealDictCursor
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import time
-from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
-from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 from passlib.context import CryptContext
-import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("powerball-db")
 
-# Password hashing
+# For hashing user passwords
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class PostgresDB:
-    """
-    PostgreSQL database connector for the Powerball Analyzer
-    """
-    
-    def __init__(self, db_url: Optional[str] = None, max_retries: int = 15, retry_interval: int = 10):
-        """
-        Initialize the database connector
-        
-        Args:
-            db_url: Database connection URL (defaults to DATABASE_URL env var)
-            max_retries: Maximum number of connection retries
-            retry_interval: Interval between retries in seconds
-        """
-        self.db_url = db_url or os.environ.get('DATABASE_URL', 'postgresql://powerball:powerball@db:5432/powerball')
+    def __init__(
+        self,
+        db_url: Optional[str] = None,
+        max_retries: int = 15,
+        retry_interval: int = 5
+    ):
+        self.db_url = db_url or os.environ["DATABASE_URL"]
         self.max_retries = max_retries
         self.retry_interval = retry_interval
         self.conn = None
-        
         logger.info(f"Database connector initialized")
-    
+
     def connect(self) -> bool:
-        """
-        Connect to the database with retries
-        
-        Returns:
-            bool: True if connection succeeded, False otherwise
-        """
+        """Connect to the database (with retries)."""
         for attempt in range(1, self.max_retries + 1):
             try:
-                if self.conn is not None and not self.conn.closed:
+                if self.conn and not self.conn.closed:
                     return True
-                
-                logger.info(f"Connecting to database (attempt {attempt}/{self.max_retries})...")
-                
-                self.conn = psycopg2.connect(
-                    self.db_url,
-                    cursor_factory=RealDictCursor,
-                )
+                logger.info(f"Connecting to database ({attempt}/{self.max_retries})")
+                self.conn = psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
                 self.conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-                
                 logger.info("Successfully connected to the database")
                 return True
-            
             except Exception as e:
-                logger.error(f"Error connecting to database: {str(e)}")
-                
-                if attempt < self.max_retries:
-                    logger.info(f"Retrying in {self.retry_interval} seconds...")
-                    time.sleep(self.retry_interval)
-                else:
-                    logger.error("Maximum connection retries reached. Giving up.")
-                    return False
-    
+                logger.error(f"Connection attempt {attempt} failed: {e}")
+                time.sleep(self.retry_interval)
+        logger.error("Exceeded maximum connection retries")
+        return False
+
     def close(self) -> None:
-        """Close the database connection"""
-        if self.conn is not None and not self.conn.closed:
+        """Close the database connection."""
+        if self.conn and not self.conn.closed:
             self.conn.close()
             logger.info("Database connection closed")
-    
+
     @contextmanager
     def cursor(self):
-        """Context manager for database cursors"""
+        """Context manager for a cursor."""
         if not self.connect():
-            raise Exception("Failed to connect to the database")
-        
-        cursor = self.conn.cursor()
+            raise RuntimeError("Database connection failed")
+        cur = self.conn.cursor()
         try:
-            yield cursor
+            yield cur
         finally:
-            cursor.close()
-    
-    def execute(self, query: str, params: Optional[tuple] = None) -> Optional[List[Dict[str, Any]]]:
+            cur.close()
+
+    def execute(self, query: str, params: Tuple = None) -> Optional[List[Dict[str, Any]]]:
         """
-        Execute a query and return the results
-        
-        Args:
-            query: SQL query to execute
-            params: Query parameters
-            
-        Returns:
-            List of dictionaries containing the query results, or None if the query fails
+        Execute a SQL statement. If it returns rows, fetch and return them.
         """
-        try:
-            with self.cursor() as cursor:
-                cursor.execute(query, params)
-                
-                if cursor.description is not None:
-                    return list(cursor.fetchall())
-                
-                return None
-        
-        except Exception as e:
-            logger.error(f"Error executing query: {str(e)}")
-            logger.error(f"Query: {query}")
-            logger.error(f"Params: {params}")
-            return None
-    
-    def execute_many(self, query: str, params_list: List[tuple]) -> bool:
-        """
-        Execute a query with multiple parameter sets in batches
-        
-        Args:
-            query: SQL query to execute
-            params_list: List of parameter tuples
-            
-        Returns:
-            bool: True if execution succeeded, False otherwise
-        """
-        if not params_list:
-            return True
-        
-        batch_size = 50  # Process in batches to avoid large transactions
-        for i in range(0, len(params_list), batch_size):
-            batch = params_list[i:i + batch_size]
-            try:
-                with self.cursor() as cursor:
-                    execute_values(cursor, query, batch)
-                    logger.debug(f"Inserted batch of {len(batch)} records")
-            except psycopg2.errors.UniqueViolation as e:
-                logger.info(f"Unique violation in batch insert: {str(e)}")
-                # Continue with next batch
-                continue
-            except Exception as e:
-                logger.error(f"Error executing batch query: {str(e)}")
-                logger.error(f"Query: {query}")
-                logger.error(f"Batch size: {len(batch)}")
-                return False
-        return True
-    
-    def init_schema(self) -> bool:
-        """
-        Initialize the database schema from schema.sql
-        
-        Returns:
-            bool: True if schema initialization succeeded, False otherwise
-        """
-        try:
-            schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
-            
-            with open(schema_path, 'r') as f:
-                schema_sql = f.read()
-            
-            with self.cursor() as cursor:
-                cursor.execute(schema_sql)
-            
-            self.ensure_admin_user()
-            
-            logger.info("Database schema initialized successfully")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error initializing database schema: {str(e)}")
-            return False
-    
-    def ensure_admin_user(self) -> None:
-        """Ensure the admin user exists in the database"""
-        try:
-            query = "SELECT * FROM users WHERE username = 'admin'"
-            result = self.execute(query)
-            
-            if not result:
-                admin_username = os.environ.get("ADMIN_USERNAME", "admin")
-                admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
-                admin_password = os.environ.get("ADMIN_PASSWORD", "powerball_admin")
-                
-                hashed_password = pwd_context.hash(admin_password)
-                
-                query = """
-                INSERT INTO users (username, email, password_hash)
-                VALUES (%s, %s, %s)
-                RETURNING id, username, email
-                """
-                
-                admin_user = self.execute(query, (admin_username, admin_email, hashed_password))
-                
-                if admin_user:
-                    self.get_user_stats(admin_user[0]['id'])
-                    logger.info("Created admin user")
-        except Exception as e:
-            logger.error(f"Error ensuring admin user: {str(e)}")
-    
-    def authenticate_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
-        """Authenticate a user by username and password"""
-        try:
-            query = "SELECT id, username, email, password_hash FROM users WHERE username = %s"
-            result = self.execute(query, (username,))
-            
-            if not result:
-                return None
-            
-            user = result[0]
-            
-            if not user['password_hash']:
-                return None
-            
-            if not pwd_context.verify(password, user['password_hash']):
-                return None
-            
-            return {
-                'id': user['id'],
-                'username': user['username'],
-                'email': user['email']
-            }
-        
-        except Exception as e:
-            logger.error(f"Error authenticating user: {str(e)}")
-            return None
-    
-    def create_user(self, username: str, password: str, email: str = None) -> Optional[Dict[str, Any]]:
-        """Create a new user"""
-        try:
-            query = "SELECT * FROM users WHERE username = %s"
-            existing_user = self.execute(query, (username,))
-            
-            if existing_user:
-                logger.warning(f"Username '{username}' already exists")
-                return None
-            
-            hashed_password = pwd_context.hash(password)
-            
-            query = """
-            INSERT INTO users (username, email, password_hash)
-            VALUES (%s, %s, %s)
-            RETURNING id, username, email
+        with self.cursor() as cur:
+            cur.execute(query, params)
+            if cur.description:
+                return cur.fetchall()
+        return None
+
+    def init_schema(self) -> None:
+        """Create all tables, indexes, and views if they don’t exist."""
+        stmts = [
+            # 1. USERS
             """
-            
-            result = self.execute(query, (username, email, hashed_password))
-            
-            if not result:
-                return None
-            
-            user = result[0]
-            self.get_user_stats(user['id'])
-            
-            return user
-        
-        except Exception as e:
-            logger.error(f"Error creating user: {str(e)}")
-            return None
-    
+            CREATE TABLE IF NOT EXISTS users (
+              id SERIAL PRIMARY KEY,
+              username VARCHAR(100) UNIQUE NOT NULL,
+              email VARCHAR(255) UNIQUE,
+              password_hash TEXT,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # 2. DRAWS
+            """
+            CREATE TABLE IF NOT EXISTS draws (
+              id SERIAL PRIMARY KEY,
+              draw_number INTEGER UNIQUE NOT NULL,
+              draw_date DATE NOT NULL,
+              white_balls INTEGER[] NOT NULL,
+              powerball INTEGER NOT NULL,
+              jackpot_amount NUMERIC(15,2) DEFAULT 0,
+              winners INTEGER DEFAULT 0,
+              source VARCHAR(50),
+              created_at TIMESTAMPTZ DEFAULT NOW(),
+              CONSTRAINT ck_white_balls_len CHECK (array_length(white_balls,1)=5),
+              CONSTRAINT ck_powerball_range CHECK (powerball BETWEEN 1 AND 26)
+            );
+            """,
+            # 3. NUMBERS
+            """
+            CREATE TABLE IF NOT EXISTS numbers (
+              id SERIAL PRIMARY KEY,
+              draw_id INTEGER REFERENCES draws(id) ON DELETE CASCADE,
+              position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 6),
+              number INTEGER NOT NULL CHECK (number BETWEEN 1 AND 69),
+              is_powerball BOOLEAN DEFAULT FALSE,
+              UNIQUE(draw_id, position)
+            );
+            """,
+            # 4. USER_STATS
+            """
+            CREATE TABLE IF NOT EXISTS user_stats (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+              draws_added INTEGER DEFAULT 0,
+              predictions_made INTEGER DEFAULT 0,
+              analysis_runs INTEGER DEFAULT 0,
+              checks_performed INTEGER DEFAULT 0,
+              wins INTEGER DEFAULT 0,
+              updated_at TIMESTAMPTZ DEFAULT NOW(),
+              UNIQUE(user_id)
+            );
+            """,
+            # 5. PREDICTIONS
+            """
+            CREATE TABLE IF NOT EXISTS predictions (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              method VARCHAR(50) NOT NULL,
+              confidence NUMERIC(5,2) CHECK (confidence BETWEEN 0 AND 100),
+              rationale TEXT,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # 6. PREDICTION_NUMBERS
+            """
+            CREATE TABLE IF NOT EXISTS prediction_numbers (
+              id SERIAL PRIMARY KEY,
+              prediction_id INTEGER REFERENCES predictions(id) ON DELETE CASCADE,
+              position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 6),
+              number INTEGER NOT NULL CHECK (
+                (position <= 5 AND number BETWEEN 1 AND 69)
+                OR (position = 6 AND number BETWEEN 1 AND 26)
+              ),
+              is_powerball BOOLEAN DEFAULT FALSE,
+              UNIQUE(prediction_id, position)
+            );
+            """,
+            # 7. EXPECTED_COMBINATIONS
+            """
+            CREATE TABLE IF NOT EXISTS expected_combinations (
+              id SERIAL PRIMARY KEY,
+              score NUMERIC(5,2) CHECK (score BETWEEN 0 AND 100),
+              method VARCHAR(50) NOT NULL,
+              reason TEXT,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # 8. USER_CHECKS
+            """
+            CREATE TABLE IF NOT EXISTS user_checks (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+              draw_id INTEGER REFERENCES draws(id) ON DELETE CASCADE,
+              white_matches INTEGER[] DEFAULT '{}',
+              powerball_match BOOLEAN DEFAULT FALSE,
+              is_winner BOOLEAN DEFAULT FALSE,
+              prize VARCHAR(100),
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # 9. ANALYSIS_RESULTS
+            """
+            CREATE TABLE IF NOT EXISTS analysis_results (
+              id SERIAL PRIMARY KEY,
+              type VARCHAR(50) NOT NULL,
+              parameters JSONB,
+              result_data JSONB NOT NULL,
+              created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            """,
+            # INDEXES
+            "CREATE INDEX IF NOT EXISTS idx_draws_number ON draws(draw_number);",
+            "CREATE INDEX IF NOT EXISTS idx_draws_date   ON draws(draw_date);",
+            "CREATE INDEX IF NOT EXISTS idx_numbers_draw  ON numbers(draw_id);",
+            "CREATE INDEX IF NOT EXISTS idx_numbers_num   ON numbers(number);",
+            "CREATE INDEX IF NOT EXISTS idx_userchecks_draw ON user_checks(draw_id);",
+            "CREATE INDEX IF NOT EXISTS idx_predictions_user ON predictions(user_id);",
+            # VIEWS
+            """
+            CREATE OR REPLACE VIEW view_all_draws AS
+              SELECT id, draw_number, draw_date, white_balls, powerball,
+                     jackpot_amount, winners, created_at
+                FROM draws
+               ORDER BY draw_date DESC, draw_number DESC;
+            """,
+            """
+            CREATE OR REPLACE VIEW view_latest_draw AS
+              SELECT * FROM view_all_draws LIMIT 1;
+            """
+        ]
+
+        for sql in stmts:
+            try:
+                self.execute(sql)
+            except Exception as e:
+                logger.error(f"Schema init error:\n{sql}\n→ {e}")
+
+        # Ensure an anonymous user exists
+        self.execute("""
+            INSERT INTO users (id, username, email)
+            VALUES (1, 'anonymous', 'anonymous@example.com')
+            ON CONFLICT (id) DO NOTHING;
+        """)
+        self.execute("""
+            INSERT INTO user_stats (user_id)
+            VALUES (1)
+            ON CONFLICT (user_id) DO NOTHING;
+        """)
+
+    # ----------------------------------------
+    # CRUD & helpers
+    # ----------------------------------------
+
     def get_draws(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get draws with pagination"""
-        query = """
-        SELECT id, draw_number, draw_date, white_balls, powerball, 
-               jackpot_amount, winners, source
-        FROM draws 
-        ORDER BY draw_number DESC 
-        LIMIT %s OFFSET %s
-        """
-        result = self.execute(query, (limit, offset))
-        return result or []
-    
+        rows = self.execute(
+            """
+            SELECT * 
+              FROM view_all_draws
+             LIMIT %s OFFSET %s
+            """,
+            (limit, offset)
+        )
+        return rows or []
+
     def get_draw_by_number(self, draw_number: int) -> Optional[Dict[str, Any]]:
-        """Get a draw by its draw number"""
-        query = """
-        SELECT id, draw_number, draw_date, white_balls, powerball, 
-               jackpot_amount, winners, source
-        FROM draws
-        WHERE draw_number = %s
-        """
-        result = self.execute(query, (draw_number,))
-        return result[0] if result else None
-    
+        rows = self.execute(
+            "SELECT * FROM draws WHERE draw_number = %s",
+            (draw_number,)
+        )
+        return rows[0] if rows else None
+
     def get_draw_by_date(self, draw_date: str) -> Optional[Dict[str, Any]]:
-        """Get a draw by its date"""
-        query = """
-        SELECT id, draw_number, draw_date, white_balls, powerball, 
-               jackpot_amount, winners, source
-        FROM draws
-        WHERE draw_date = %s
-        """
-        result = self.execute(query, (draw_date,))
-        return result[0] if result else None
-    
+        rows = self.execute(
+            "SELECT * FROM draws WHERE draw_date = %s",
+            (draw_date,)
+        )
+        return rows[0] if rows else None
+
     def get_latest_draw(self) -> Optional[Dict[str, Any]]:
-        """Get the latest draw"""
-        query = """
-        SELECT id, draw_number, draw_date, white_balls, powerball, 
-               jackpot_amount, winners, source
-        FROM draws
-        ORDER BY draw_number DESC
-        LIMIT 1
-        """
-        result = self.execute(query)
-        return result[0] if result else None
-    
+        rows = self.execute("SELECT * FROM view_latest_draw")
+        return rows[0] if rows else None
+
     def add_draw(
         self,
         draw_number: int,
@@ -312,369 +265,72 @@ class PostgresDB:
         powerball: int,
         jackpot_amount: float = 0,
         winners: int = 0,
-        source: str = 'api'
+        source: str = "api"
     ) -> Optional[Dict[str, Any]]:
-        """Add a new draw with white_balls and powerball"""
-        logger.debug(f"Attempting to add draw: draw_number={draw_number}, date={draw_date}, white_balls={white_balls}, powerball={powerball}")
-        
-        # Check for existing draw
-        existing_draw = self.get_draw_by_number(draw_number)
-        if existing_draw:
-            logger.info(f"Draw {draw_number} already exists, skipping")
-            return existing_draw
-        
-        try:
-            query = """
-            INSERT INTO draws 
-            (draw_number, draw_date, white_balls, powerball, jackpot_amount, 
-             winners, source)
+        # Skip if already exists
+        if self.get_draw_by_number(draw_number):
+            logger.info(f"Draw {draw_number} exists, skipping")
+            return None
+
+        # Insert into draws
+        inserted = self.execute(
+            """
+            INSERT INTO draws
+              (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, draw_number, draw_date, white_balls, powerball, 
-                      jackpot_amount, winners, source
-            """
-            
-            result = self.execute(query, (
-                draw_number, draw_date, white_balls, powerball, jackpot_amount,
-                winners, source
-            ))
-            
-            if not result:
-                logger.error(f"Failed to insert draw {draw_number}: No result returned")
-                return None
-            
-            draw = result[0]
-            logger.info(f"Successfully added draw {draw_number}")
-            
-            # Insert into numbers table
-            number_params = []
-            for i, number in enumerate(white_balls):
-                number_params.append((draw["id"], i+1, number, False))
-            number_params.append((draw["id"], 6, powerball, True))
-            
-            numbers_query = """
-            INSERT INTO numbers (draw_id, position, number, is_powerball)
-            VALUES %s
-            """
-            
-            if not self.execute_many(numbers_query, number_params):
-                logger.error(f"Failed to insert numbers for draw {draw_number}")
-            
-            return draw
-        
-        except psycopg2.errors.UniqueViolation as e:
-            logger.info(f"Draw {draw_number} already exists in database: {str(e)}")
-            return self.get_draw_by_number(draw_number)
-        except psycopg2.errors.CheckViolation as e:
-            logger.error(f"Check violation for draw {draw_number}: {str(e)}")
+            RETURNING id, draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source, created_at
+            """,
+            (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source)
+        )
+        if not inserted:
+            logger.error(f"Failed to insert draw {draw_number}")
             return None
-        except Exception as e:
-            logger.error(f"Error adding draw {draw_number}: {str(e)}")
-            return None
-    
-    def add_prediction(
-        self,
-        white_balls: List[int],
-        powerball: int,
-        method: str,
-        confidence: float,
-        rationale: str,
-        user_id: int = 1
-    ) -> Optional[Dict[str, Any]]:
-        """Add a new prediction"""
-        query = """
-        INSERT INTO predictions 
-        (user_id, method, confidence, rationale)
-        VALUES (%s, %s, %s, %s)
-        RETURNING id
-        """
-        
-        result = self.execute(query, (user_id, method, confidence, rationale))
-        
-        if not result:
-            return None
-        
-        pred_id = result[0]['id']
-        
-        number_params = []
-        for i, number in enumerate(white_balls):
-            number_params.append((pred_id, i+1, number, False))
-        number_params.append((pred_id, 6, powerball, True))
-        
-        numbers_query = """
-        INSERT INTO prediction_numbers (prediction_id, position, number, is_powerball)
-        VALUES %s
-        """
-        
-        self.execute_many(numbers_query, number_params)
-        
-        self.update_user_stat(user_id, 'predictions_made')
-        
-        return {
-            'id': pred_id,
-            'user_id': user_id,
-            'white_balls': white_balls,
-            'powerball': powerball,
-            'method': method,
-            'confidence': confidence,
-            'rationale': rationale,
-            'created_at': datetime.now().isoformat()
-        }
-    
-    def get_predictions(
-        self,
-        method: Optional[str] = None,
-        user_id: Optional[int] = None,
-        limit: int = 10,
-        offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """Get predictions with filtering"""
-        query = """
-        SELECT 
-            p.id, p.user_id, p.method, p.confidence, p.rationale, p.created_at,
-            array_agg(CASE WHEN pn.is_powerball = false THEN pn.number END ORDER BY pn.position) FILTER (WHERE pn.is_powerball = false) AS white_balls,
-            (array_agg(pn.number) FILTER (WHERE pn.is_powerball = true))[1] AS powerball
-        FROM 
-            predictions p
-        JOIN 
-            prediction_numbers pn ON p.id = pn.prediction_id
-        WHERE 1=1
-        """
-        
-        params = []
-        
-        if method and method.lower() != 'all':
-            query += " AND p.method = %s"
-            params.append(method)
-        
-        if user_id:
-            query += " AND p.user_id = %s"
-            params.append(user_id)
-        
-        query += """
-        GROUP BY p.id
-        ORDER BY p.created_at DESC
-        LIMIT %s OFFSET %s
-        """
-        
-        params.extend([limit, offset])
-        
-        result = self.execute(query, tuple(params))
-        return result if result else []
-    
-    def get_user_stats(self, user_id: int = 1) -> Dict[str, Any]:
-        """Get stats for a user"""
-        query = """
-        SELECT * FROM user_stats WHERE user_id = %s
-        """
-        
-        result = self.execute(query, (user_id,))
-        
-        if not result:
-            insert_query = """
-            INSERT INTO user_stats (user_id)
-            VALUES (%s)
-            RETURNING *
-            """
-            
-            result = self.execute(insert_query, (user_id,))
-        
-        return result[0] if result else {
-            "user_id": user_id,
-            "draws_added": 0,
-            "predictions_made": 0,
-            "analysis_runs": 0,
-            "checks_performed": 0,
-            "wins": 0
-        }
-    
-    def update_user_stat(self, user_id: int, stat: str) -> bool:
-        """Increment a user stat counter"""
-        valid_stats = ['draws_added', 'predictions_made', 'analysis_runs', 'checks_performed', 'wins']
-        
-        if stat not in valid_stats:
-            logger.error(f"Invalid user stat: {stat}")
-            return False
-        
-        query = f"""
-        UPDATE user_stats 
-        SET {stat} = {stat} + 1, updated_at = NOW() 
-        WHERE user_id = %s
-        """
-        
-        self.execute(query, (user_id,))
-        return True
-    
+        draw = inserted[0]
+
+        # Insert into numbers
+        with self.cursor() as cur:
+            for idx, num in enumerate(white_balls, start=1):
+                cur.execute(
+                    "INSERT INTO numbers (draw_id, position, number, is_powerball) VALUES (%s, %s, %s, FALSE)",
+                    (draw["id"], idx, num)
+                )
+            cur.execute(
+                "INSERT INTO numbers (draw_id, position, number, is_powerball) VALUES (%s, 6, %s, TRUE)",
+                (draw["id"], powerball)
+            )
+        return draw
+
     def add_user_check(
         self,
         user_id: int,
-        draw_id: str,
+        draw_id: int,
         numbers: List[int],
         white_matches: List[int],
         powerball_match: bool,
         is_winner: bool,
         prize: str
     ) -> Optional[Dict[str, Any]]:
-        """Add a user number check"""
-        query = """
-        INSERT INTO user_checks
-        (user_id, draw_id, white_matches, powerball_match, is_winner, prize)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING *
-        """
-        
-        result = self.execute(query, (
-            user_id, draw_id, white_matches, powerball_match, is_winner, prize
-        ))
-        
-        if result:
-            self.update_user_stat(user_id, 'checks_performed')
-            if is_winner:
-                self.update_user_stat(user_id, 'wins')
-        
-        return result[0] if result else None
-    
-    def get_user_checks(self, user_id: int, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
-        """Get checks for a user"""
-        query = """
-        SELECT 
-            uc.*, 
-            d.draw_number, d.draw_date, d.white_balls, d.powerball
-        FROM 
-            user_checks uc
-        JOIN 
-            draws d ON uc.draw_id = d.id
-        WHERE 
-            uc.user_id = %s
-        ORDER BY 
-            uc.created_at DESC
-        LIMIT %s OFFSET %s
-        """
-        
-        result = self.execute(query, (user_id, limit, offset))
-        return result if result else []
-    
-    def get_frequency_analysis(self) -> Dict[str, Dict[str, int]]:
-        """Get frequency analysis of numbers"""
-        white_query = """
-        SELECT unnest(white_balls) as number, COUNT(*) as count
-        FROM draws
-        GROUP BY unnest(white_balls)
-        ORDER BY number
-        """
-        
-        powerball_query = """
-        SELECT powerball as number, COUNT(*) as count
-        FROM draws
-        GROUP BY powerball
-        ORDER BY number
-        """
-        
-        white_results = self.execute(white_query) or []
-        powerball_results = self.execute(powerball_query) or []
-        
-        white_freq = {str(i): 0 for i in range(1, 70)}
-        pb_freq = {str(i): 0 for i in range(1, 27)}
-        
-        for row in white_results:
-            white_freq[str(row['number'])] = row['count']
-        
-        for row in powerball_results:
-            pb_freq[str(row['number'])] = row['count']
-        
-        return {
-            "white_balls": white_freq,
-            "powerballs": pb_freq
-        }
-    
-    def save_analysis_result(
-        self,
-        analysis_type: str,
-        result_data: Dict[str, Any],
-        parameters: Optional[Dict[str, Any]] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Save an analysis result"""
-        query = """
-        INSERT INTO analysis_results (type, parameters, result_data)
-        VALUES (%s, %s, %s)
-        RETURNING *
-        """
-        
-        result = self.execute(query, (
-            analysis_type, 
-            json.dumps(parameters) if parameters else None,
-            json.dumps(result_data)
-        ))
-        
-        return result[0] if result else None
-    
-    def get_analysis_results(self, analysis_type: str, limit: int = 1) -> List[Dict[str, Any]]:
-        """Get recent analysis results of a specific type"""
-        query = """
-        SELECT *
-        FROM analysis_results
-        WHERE type = %s
-        ORDER BY created_at DESC
-        LIMIT %s
-        """
-        
-        result = self.execute(query, (analysis_type, limit))
-        return result if result else []
-    
-    def add_expected_combination(
-        self,
-        white_balls: List[int],
-        powerball: int,
-        score: float,
-        method: str,
-        reason: str
-    ) -> Optional[Dict[str, Any]]:
-        """Add an expected combination"""
-        query = """
-        INSERT INTO expected_combinations (score, method, reason)
-        VALUES (%s, %s, %s)
-        RETURNING id
-        """
-        
-        result = self.execute(query, (score, method, reason))
-        
-        if result:
-            combo_id = result[0]['id']
-            return {
-                'id': combo_id,
-                'white_balls': white_balls,
-                'powerball': powerball,
-                'score': score,
-                'method': method,
-                'reason': reason,
-                'created_at': datetime.now().isoformat()
-            }
-        
-        return None
-    
-    def get_expected_combinations(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Get top expected combinations"""
-        query = """
-        SELECT *
-        FROM expected_combinations
-        ORDER BY score DESC
-        LIMIT %s
-        """
-        
-        result = self.execute(query, (limit,))
-        return result if result else []
-    
-    def clear_expected_combinations(self) -> bool:
-        """Clear all expected combinations"""
-        query = "DELETE FROM expected_combinations"
-        self.execute(query)
-        return True
+        rows = self.execute(
+            """
+            INSERT INTO user_checks
+              (user_id, draw_id, white_matches, powerball_match, is_winner, prize)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """,
+            (user_id, draw_id, white_matches, powerball_match, is_winner, prize)
+        )
+        return rows[0] if rows else None
 
-# Singleton instance
-_db_instance = None
+    def update_user_stat(self, user_id: int, field: str) -> None:
+        # e.g. field = 'draws_added' or 'checks_performed'
+        self.execute(f"""
+            UPDATE user_stats
+               SET {field} = {field} + 1,
+                   updated_at = NOW()
+             WHERE user_id = %s
+        """, (user_id,))
 
+# Singleton & helper
+_db = PostgresDB()
 def get_db() -> PostgresDB:
-    """Get the database singleton instance"""
-    global _db_instance
-    if _db_instance is None:
-        _db_instance = PostgresDB()
-    return _db_instance
+    return _db
