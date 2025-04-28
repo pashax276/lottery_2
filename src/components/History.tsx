@@ -1,31 +1,28 @@
 // src/components/History.tsx
 import React, { useState, useEffect } from 'react';
-import { Calendar, Search, Filter, Trophy, Check, X } from 'lucide-react';
+import { Calendar, Search, Filter, Trophy, X } from 'lucide-react';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
 
-// Assume getDraws implementation
+// API helper (unchanged)
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
 const getDraws = async (limit: number, offset: number) => {
   try {
-    console.log("Fetching draws from:", `${API_URL}/api/draws?limit=${limit}&offset=${offset}`);
-    const response = await fetch(`${API_URL}/api/draws?limit=${limit}&offset=${offset}`, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
+    const url = `${API_URL}/api/draws?limit=${limit}&offset=${offset}`;
+    console.log('Fetching draws from:', url);
+    const response = await fetch(url, {
+      headers: { 'Content-Type': 'application/json' }
     });
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return await response.json();
   } catch (err) {
-    console.error("getDraws error:", err);
+    console.error('getDraws error:', err);
     throw err;
   }
 };
 
-// Data utility functions (stubs based on usage)
+// Utility functions (unchanged)
 const safelyParseNumber = (value: any, defaultValue: number): number => {
   if (typeof value === 'number') return value;
   if (typeof value === 'string') {
@@ -35,9 +32,8 @@ const safelyParseNumber = (value: any, defaultValue: number): number => {
   return defaultValue;
 };
 
-const isValidArray = (arr: any): boolean => {
-  return Array.isArray(arr) && arr.every(item => typeof item === 'number');
-};
+const isValidArray = (arr: any): boolean =>
+  Array.isArray(arr) && arr.every(item => typeof item === 'number');
 
 const processWhiteBalls = (whiteBalls: any): number[] => {
   try {
@@ -45,27 +41,23 @@ const processWhiteBalls = (whiteBalls: any): number[] => {
       return whiteBalls.slice(0, 5);
     }
     if (typeof whiteBalls === 'string') {
-      // Handle PostgreSQL array format, e.g., "{15,44,63,66,69}"
       const cleaned = whiteBalls.replace(/[{}]/g, '');
-      const numbers = cleaned.split(',').map(num => parseInt(num.trim(), 10)).filter(num => !isNaN(num));
-      if (numbers.length === 5) return numbers;
+      const nums = cleaned
+        .split(',')
+        .map(n => parseInt(n.trim(), 10))
+        .filter(n => !isNaN(n));
+      if (nums.length === 5) return nums;
     }
-    console.warn("Invalid white_balls format:", whiteBalls);
-    return [1, 2, 3, 4, 5]; // Fallback
-  } catch (err) {
-    console.error("Error processing white_balls:", err);
+    console.warn('Invalid white_balls format:', whiteBalls);
+    return [1, 2, 3, 4, 5];
+  } catch {
     return [1, 2, 3, 4, 5];
   }
 };
 
 const processPowerball = (powerball: any): number => {
-  try {
-    const parsed = safelyParseNumber(powerball, 1);
-    return parsed >= 1 && parsed <= 26 ? parsed : 1;
-  } catch (err) {
-    console.error("Error processing powerball:", err);
-    return 1;
-  }
+  const p = safelyParseNumber(powerball, 1);
+  return p >= 1 && p <= 26 ? p : 1;
 };
 
 interface Draw {
@@ -78,7 +70,7 @@ interface Draw {
   winners: number;
 }
 
-const History = () => {
+const History: React.FC = () => {
   const [draws, setDraws] = useState<Draw[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,105 +81,60 @@ const History = () => {
   const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
   const [isMarkingWinner, setIsMarkingWinner] = useState(false);
 
-  // Items per page
+  // How many rows per page in the table
   const itemsPerPage = 20;
 
+  // On mount, fetch *all* draws (up to 1000)
   useEffect(() => {
     fetchDraws();
-  }, [page]);
+  }, []);
 
   const fetchDraws = async () => {
     setLoading(true);
     setError(null);
-    
     try {
-      const response = await getDraws(itemsPerPage, (page - 1) * itemsPerPage);
-      
-      console.log('Raw API response:', response);
-      
-      if (response && response.draws) {
-        if (response.draws.length > 0) {
-          const firstDraw = response.draws[0];
-          console.log('First draw from API:', firstDraw);
-          console.log('white_balls type:', typeof firstDraw.white_balls);
-          console.log('white_balls value:', firstDraw.white_balls);
-        }
-        
-        const processedDraws = response.draws.map((draw: any) => {
-          const whiteBalls = processWhiteBalls(draw.white_balls);
-          const powerball = processPowerball(draw.powerball);
-          
-          console.log('Processed white balls:', whiteBalls);
-          console.log('Processed powerball:', powerball);
-          
-          return {
-            id: draw.id.toString(),
-            draw_number: safelyParseNumber(draw.draw_number, 1),
-            draw_date: draw.draw_date || 'Unknown',
-            white_balls: whiteBalls,
-            powerball: powerball,
-            jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
-            winners: safelyParseNumber(draw.winners, 0),
-          };
-        });
-        
-        setDraws(processedDraws);
-        setTotalDraws(response.count || processedDraws.length);
-        console.log('Processed draws total:', processedDraws.length);
-        if (processedDraws.length > 0) {
-          console.log('First processed draw:', processedDraws[0]);
-        }
-      } else {
-        throw new Error('Failed to fetch draws or no draws found');
+      // **Fetch all** instead of paginating server-side
+      const response = await getDraws(1000, 0);
+      if (!response || !response.draws) {
+        throw new Error('No draws returned');
       }
+
+      const processed: Draw[] = response.draws.map((d: any) => ({
+        id: d.id.toString(),
+        draw_number: safelyParseNumber(d.draw_number, 1),
+        draw_date: d.draw_date || 'Unknown',
+        white_balls: processWhiteBalls(d.white_balls),
+        powerball: processPowerball(d.powerball),
+        jackpot_amount: safelyParseNumber(d.jackpot_amount, 0),
+        winners: safelyParseNumber(d.winners, 0),
+      }));
+
+      setDraws(processed);
+      setTotalDraws(processed.length);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch draws';
-      console.error('Error fetching draws:', err);
-      setError(errorMessage);
-      showToast.error(errorMessage);
+      const msg = err instanceof Error ? err.message : 'Error fetching draws';
+      console.error('fetchDraws:', err);
+      setError(msg);
+      showToast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(e.target.value);
-    setPage(1);
-  };
-
-  const handleDateFilter = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setDateFilter(e.target.value);
-    setPage(1);
-  };
-
-  const clearFilters = () => {
-    setSearchTerm('');
-    setDateFilter('');
-    setPage(1);
-  };
-
-  const handleMarkWinner = async (drawId: string, drawNumber: number, isWinner: boolean) => {
+  // Mark winner / no-winner (unchanged)
+  const handleMarkWinner = async (id: string, num: number, isWinner: boolean) => {
     setIsMarkingWinner(true);
-    setSelectedDraw(drawId);
-    
+    setSelectedDraw(id);
     try {
-      // Placeholder for API call to update winner status
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      setDraws(prevDraws => 
-        prevDraws.map(draw => 
-          draw.id === drawId 
-            ? { ...draw, winners: isWinner ? 1 : 0 } 
-            : draw
-        )
+      // TODO: call real API
+      await new Promise(r => setTimeout(r, 500));
+      setDraws(ds =>
+        ds.map(d => (d.id === id ? { ...d, winners: isWinner ? 1 : 0 } : d))
       );
-      
       showToast.success(
-        isWinner 
-          ? `Draw #${drawNumber} marked as a winner` 
-          : `Draw #${drawNumber} marked as not a winner`
+        isWinner ? `Draw #${num} marked winner` : `Draw #${num} marked no winner`
       );
-    } catch (err) {
+    } catch {
       showToast.error('Failed to update winner status');
     } finally {
       setIsMarkingWinner(false);
@@ -195,23 +142,38 @@ const History = () => {
     }
   };
 
-  // Filter draws based on search term and date filter
-  const filteredDraws = draws.filter(draw => {
-    const matchesSearch = searchTerm === '' || 
-      draw.draw_number.toString().includes(searchTerm) ||
-      draw.white_balls.some((ball: number) => ball.toString().includes(searchTerm)) ||
-      draw.powerball.toString().includes(searchTerm);
-    
-    const matchesDate = dateFilter === '' || draw.draw_date.includes(dateFilter);
-    
+  // Apply filters
+  const filtered = draws.filter(d => {
+    const matchesSearch =
+      !searchTerm ||
+      d.draw_number.toString().includes(searchTerm) ||
+      d.white_balls.some(b => b.toString().includes(searchTerm)) ||
+      d.powerball.toString().includes(searchTerm);
+
+    const matchesDate = !dateFilter || d.draw_date.includes(dateFilter);
     return matchesSearch && matchesDate;
   });
 
-  // Calculate pagination
-  const totalPages = Math.max(1, Math.ceil(filteredDraws.length / itemsPerPage));
+  // Client-side pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const startIndex = (page - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
-  const paginatedDraws = filteredDraws.slice(startIndex, endIndex);
+  const pageItems = filtered.slice(startIndex, endIndex);
+
+  // Handlers for filter inputs
+  const onSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+    setPage(1);
+  };
+  const onDate = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDateFilter(e.target.value);
+    setPage(1);
+  };
+  const clearFilters = () => {
+    setSearchTerm('');
+    setDateFilter('');
+    setPage(1);
+  };
 
   if (loading) {
     return (
@@ -220,17 +182,16 @@ const History = () => {
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="bg-red-50 p-6 rounded-lg shadow-sm">
-        <h2 className="text-red-800 text-lg font-medium mb-2">Error loading draws</h2>
+        <h2 className="text-red-800 text-lg font-medium mb-2">Error</h2>
         <p className="text-red-600">{error}</p>
-        <button 
+        <button
           onClick={fetchDraws}
           className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
         >
-          Try Again
+          Retry
         </button>
       </div>
     );
@@ -239,35 +200,34 @@ const History = () => {
   return (
     <div className="space-y-6">
       <section className="bg-white rounded-lg shadow-sm p-6">
+        {/* Header + Filters */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-2">
             <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
-            <span className="text-sm text-gray-500">({totalDraws} total draws)</span>
+            <span className="text-sm text-gray-500">({totalDraws} total)</span>
           </div>
           <div className="flex items-center space-x-4">
             <div className="relative">
               <input
                 type="text"
-                value={searchTerm}
-                onChange={handleSearch}
                 placeholder="Search draws..."
-                className="pl-10 pr-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={searchTerm}
+                onChange={onSearch}
+                className="pl-10 pr-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-500"
               />
-              <Search className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <Search className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             </div>
-            
             <div className="relative">
               <input
                 type="date"
                 value={dateFilter}
-                onChange={handleDateFilter}
-                className="pl-10 pr-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                onChange={onDate}
+                className="pl-10 pr-4 py-2 border rounded-md focus:ring-2 focus:ring-blue-500"
               />
-              <Calendar className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+              <Calendar className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             </div>
-            
             {(searchTerm || dateFilter) && (
-              <button 
+              <button
                 onClick={clearFilters}
                 className="text-sm text-gray-500 hover:text-gray-700"
               >
@@ -277,108 +237,87 @@ const History = () => {
           </div>
         </div>
 
-        {filteredDraws.length === 0 ? (
+        {/* No results */}
+        {filtered.length === 0 ? (
           <div className="text-center py-12">
             <Filter className="h-12 w-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-500">No draws found</h3>
-            <p className="text-gray-400 mt-1">Try changing your filters or add some draws.</p>
+            <p className="text-gray-400 mt-1">Try different filters.</p>
           </div>
         ) : (
           <>
+            {/* Table */}
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead>
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Draw #
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Date
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Numbers
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Jackpot
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Winner
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Numbers</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Jackpot</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Winner?</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {paginatedDraws.map((draw) => (
-                    <tr key={draw.id} className="hover:bg-gray-50">
+                  {pageItems.map(d => (
+                    <tr key={d.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {draw.draw_number}
+                        {d.draw_number}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {draw.draw_date}
+                        {d.draw_date}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
-                          {draw.white_balls.map((number: number, idx: number) => (
-                            <NumberBall
-                              key={idx}
-                              number={number}
-                              isPowerball={false}
-                              size={30}
-                            />
+                          {d.white_balls.map((n, i) => (
+                            <NumberBall key={i} number={n} size={30} />
                           ))}
-                          <NumberBall
-                            number={draw.powerball}
-                            isPowerball={true}
-                            size={30}
-                          />
+                          <NumberBall number={d.powerball} isPowerball size={30} />
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {draw.jackpot_amount ? `$${draw.jackpot_amount.toLocaleString()}` : 'N/A'}
+                        {d.jackpot_amount
+                          ? `$${d.jackpot_amount.toLocaleString()}`
+                          : 'N/A'}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {draw.winners > 0 ? (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {d.winners > 0 ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            <Check className="h-3 w-3 mr-1" />
-                            Yes
+                            <Trophy className="h-3 w-3 mr-1" />Yes
                           </span>
                         ) : (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            <X className="h-3 w-3 mr-1" />
-                            No
+                            <X className="h-3 w-3 mr-1" />No
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {isMarkingWinner && selectedDraw === draw.id ? (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isMarkingWinner && selectedDraw === d.id ? (
                           <LoadingSpinner size={20} />
                         ) : (
                           <div className="flex space-x-2">
                             <button
-                              onClick={() => handleMarkWinner(draw.id, draw.draw_number, true)}
+                              onClick={() => handleMarkWinner(d.id, d.draw_number, true)}
+                              disabled={d.winners > 0}
                               className={`inline-flex items-center px-2 py-1 text-xs rounded ${
-                                draw.winners > 0 
-                                  ? 'bg-green-100 text-green-700' 
-                                  : 'bg-gray-100 text-gray-700 hover:bg-green-100 hover:text-green-700'
+                                d.winners > 0
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-gray-100 text-gray-700 hover:bg-green-100'
                               }`}
-                              disabled={draw.winners > 0}
                             >
-                              <Trophy className="h-3 w-3 mr-1" />
-                              Winner
+                              <Trophy className="h-3 w-3 mr-1" />Winner
                             </button>
                             <button
-                              onClick={() => handleMarkWinner(draw.id, draw.draw_number, false)}
+                              onClick={() => handleMarkWinner(d.id, d.draw_number, false)}
+                              disabled={d.winners === 0}
                               className={`inline-flex items-center px-2 py-1 text-xs rounded ${
-                                draw.winners === 0 
-                                  ? 'bg-gray-200 text-gray-700' 
+                                d.winners === 0
+                                  ? 'bg-gray-200 text-gray-700'
                                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                               }`}
-                              disabled={draw.winners === 0}
                             >
-                              <X className="h-3 w-3 mr-1" />
-                              No Winner
+                              <X className="h-3 w-3 mr-1" />No Winner
                             </button>
                           </div>
                         )}
@@ -389,48 +328,44 @@ const History = () => {
               </table>
             </div>
 
+            {/* Pagination */}
             <div className="mt-6 flex items-center justify-between">
               <div className="text-sm text-gray-500">
-                Showing {startIndex + 1} to {Math.min(endIndex, filteredDraws.length)} of {filteredDraws.length} results
+                Showing {startIndex + 1}–{Math.min(endIndex, filtered.length)} of{' '}
+                {filtered.length}
               </div>
               <div className="flex items-center space-x-4">
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => setPage(1)}
-                    disabled={page === 1}
-                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    First
-                  </button>
-                  <button
-                    onClick={() => setPage(prev => Math.max(prev - 1, 1))}
-                    disabled={page === 1}
-                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Previous
-                  </button>
-                </div>
-                
-                <div className="text-sm text-gray-700">
-                  Page {page} of {totalPages || 1}
-                </div>
-                
-                <div className="flex items-center space-x-2">
-                  <button
-                    onClick={() => setPage(prev => Math.min(prev + 1, totalPages || 1))}
-                    disabled={page >= totalPages}
-                    className="px-4 py-2 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Next
-                  </button>
-                  <button
-                    onClick={() => setPage(totalPages || 1)}
-                    disabled={page === totalPages || totalPages === 0}
-                    className="px-2 py-1 border rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Last
-                  </button>
-                </div>
+                <button
+                  onClick={() => setPage(1)}
+                  disabled={page === 1}
+                  className="px-2 py-1 border rounded-md text-sm disabled:opacity-50"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.max(p - 1, 1))}
+                  disabled={page === 1}
+                  className="px-4 py-2 border rounded-md text-sm disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-gray-700">
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage(p => Math.min(p + 1, totalPages))}
+                  disabled={page === totalPages}
+                  className="px-4 py-2 border rounded-md text-sm disabled:opacity-50"
+                >
+                  Next
+                </button>
+                <button
+                  onClick={() => setPage(totalPages)}
+                  disabled={page === totalPages}
+                  className="px-2 py-1 border rounded-md text-sm disabled:opacity-50"
+                >
+                  Last
+                </button>
               </div>
             </div>
           </>

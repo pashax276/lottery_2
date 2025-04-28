@@ -8,6 +8,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
+import json
 
 # Import our modules
 from db import get_db
@@ -100,51 +101,102 @@ async def lifespan(app: FastAPI):
         if not draws:
             logger.info("No draws found, scraping historical draws...")
             try:
-                historical_draws = await app.state.scraper.fetch_historical_draws(count=100)
+                historical_draws = await app.state.scraper.fetch_historical_draws(count=500)
                 inserted_count = 0
                 
+                # Process one draw at a time with proper error handling
                 for draw_data in historical_draws:
                     try:
-                        # Validate draw data
-                        if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
-                            logger.error(f"Invalid white_balls for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
+                        # Basic validation
+                        if not isinstance(draw_data, dict):
+                            logger.error(f"Invalid draw data type: {type(draw_data)}")
                             continue
-                        if not all(1 <= x <= 69 for x in draw_data['white_balls']):
-                            logger.error(f"White balls out of range for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
-                            continue
-                        if len(set(draw_data['white_balls'])) != 5:
-                            logger.error(f"Duplicate white balls for draw {draw_data['draw_number']}: {draw_data['white_balls']}")
-                            continue
-                        if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
-                            logger.error(f"Invalid powerball for draw {draw_data['draw_number']}: {draw_data['powerball']}")
-                            continue
-                        if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
-                            logger.error(f"Invalid draw_number: {draw_data['draw_number']}")
-                            continue
-                        if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
-                            logger.error(f"Invalid draw_date for draw {draw_data['draw_number']}: {draw_data['draw_date']}")
+                            
+                        if not all(k in draw_data for k in ['draw_number', 'draw_date', 'white_balls', 'powerball']):
+                            logger.error(f"Missing required fields in draw data: {draw_data.keys()}")
                             continue
                         
-                        logger.debug(f"Attempting to insert draw {draw_data['draw_number']}")
-                        result = app.state.db.add_draw(
-                            draw_number=draw_data['draw_number'],
-                            draw_date=draw_data['draw_date'],
-                            white_balls=draw_data['white_balls'],
-                            powerball=draw_data['powerball'],
-                            jackpot_amount=draw_data.get('jackpot_amount', 0),
-                            winners=draw_data.get('winners', 0),
-                            source=draw_data.get('source', 'api')
-                        )
-                        if result:
-                            inserted_count += 1
-                            logger.info(f"Inserted draw {draw_data['draw_number']}")
-                        else:
-                            logger.warning(f"Failed to insert draw {draw_data['draw_number']}")
+                        # Validate white_balls format
+                        white_balls = draw_data.get('white_balls', [])
+                        if not isinstance(white_balls, list) or len(white_balls) != 5:
+                            logger.error(f"Invalid white_balls format: {white_balls}")
+                            continue
+                            
+                        # Validate white_balls values
+                        if not all(isinstance(ball, int) and 1 <= ball <= 69 for ball in white_balls):
+                            logger.error(f"Invalid white_balls values: {white_balls}")
+                            continue
+                            
+                        # Validate powerball
+                        powerball = draw_data.get('powerball')
+                        if not isinstance(powerball, int) or not 1 <= powerball <= 26:
+                            logger.error(f"Invalid powerball value: {powerball}")
+                            continue
+                            
+                        # Validate draw number
+                        draw_number = draw_data.get('draw_number')
+                        if not isinstance(draw_number, int) or draw_number <= 0:
+                            logger.error(f"Invalid draw_number: {draw_number}")
+                            continue
+                            
+                        # Validate draw date
+                        draw_date = draw_data.get('draw_date')
+                        if not isinstance(draw_date, str) or not draw_date:
+                            logger.error(f"Invalid draw_date: {draw_date}")
+                            continue
+                        
+                        # Check if draw already exists to avoid duplicates
+                        existing_draw = app.state.db.get_draw_by_number(draw_number)
+                        if existing_draw:
+                            logger.info(f"Draw {draw_number} already exists, skipping")
+                            continue
+                        
+                        # Insert with simple approach to bypass potential execute_many issues
+                        with app.state.db.cursor() as cursor:
+                            # 1. Insert the draw
+                            cursor.execute("""
+                                INSERT INTO draws 
+                                (draw_number, draw_date, white_balls, powerball, jackpot_amount, winners, source)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                RETURNING id
+                            """, (
+                                draw_number, 
+                                draw_date, 
+                                white_balls, 
+                                powerball, 
+                                draw_data.get('jackpot_amount', 0),
+                                draw_data.get('winners', 0),
+                                draw_data.get('source', 'api')
+                            ))
+                            
+                            draw_id = cursor.fetchone()['id']
+                            
+                            # 2. Insert the numbers one by one (avoiding batch insert)
+                            for i, ball in enumerate(white_balls):
+                                cursor.execute("""
+                                    INSERT INTO numbers (draw_id, position, number, is_powerball)
+                                    VALUES (%s, %s, %s, %s)
+                                """, (draw_id, i+1, ball, False))
+                            
+                            # Insert powerball
+                            cursor.execute("""
+                                INSERT INTO numbers (draw_id, position, number, is_powerball)
+                                VALUES (%s, %s, %s, %s)
+                            """, (draw_id, 6, powerball, True))
+                        
+                        inserted_count += 1
+                        logger.info(f"Inserted draw {draw_number}")
+                        
                     except Exception as e:
-                        logger.error(f"Error inserting draw {draw_data['draw_number']}: {str(e)}")
+                        logger.error(f"Error inserting draw {draw_number}: {str(e)}")
                         continue
                 
                 logger.info(f"Populated {inserted_count} historical draws")
+                
+                # Verify insertion
+                final_count = len(app.state.db.get_draws(limit=1000))
+                logger.info(f"Database contains {final_count} draws after population")
+                
             except Exception as e:
                 logger.error(f"Error populating historical draws: {str(e)}")
     
@@ -283,7 +335,7 @@ async def get_draws(limit: int = 20, offset: int = 0):
             if not DEBUG_NO_FALLBACK:
                 draw['powerball'] = 1
     
-    logger.debug(f"Processed draws for response: {draws}")
+    logger.info(f"Returning {len(draws)} draws for /api/draws with limit={limit}, offset={offset}")
     return {"success": True, "draws": draws, "count": len(draws)}
 
 @app.get("/api/draws/latest")
@@ -518,25 +570,43 @@ async def scrape_latest(background_tasks: BackgroundTasks):
         if not draw_data:
             raise HTTPException(status_code=404, detail="No data found")
         
+        # Log raw draw data
+        logger.debug(f"Raw latest draw data: {json.dumps(draw_data)}")
+        
+        # Validate draw data
+        if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
+            raise ValueError(f"Invalid draw_number: {draw_data['draw_number']}")
+        if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
+            raise ValueError(f"Invalid draw_date: {draw_data['draw_date']}")
+        if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
+            raise ValueError(f"Invalid white_balls: {draw_data['white_balls']}")
+        if not all(isinstance(x, int) and 1 <= x <= 69 for x in draw_data['white_balls']):
+            raise ValueError(f"White balls out of range: {draw_data['white_balls']}")
+        if len(set(draw_data['white_balls'])) != 5:
+            raise ValueError(f"Duplicate white balls: {draw_data['white_balls']}")
+        if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
+            raise ValueError(f"Invalid powerball: {draw_data['powerball']}")
+        if not isinstance(draw_data.get('jackpot_amount', 0), (int, float)) or draw_data.get('jackpot_amount', 0) < 0:
+            raise ValueError(f"Invalid jackpot_amount: {draw_data.get('jackpot_amount')}")
+        if not isinstance(draw_data.get('winners', 0), int) or draw_data.get('winners', 0) < 0:
+            raise ValueError(f"Invalid winners: {draw_data.get('winners')}")
+        
         # Check if draw already exists
         existing_draw = db.get_draw_by_number(draw_data['draw_number'])
         
         if existing_draw:
             return {"success": True, "message": "Draw already exists", "draw": existing_draw}
         
-        # Make sure we're only passing expected parameters
-        add_draw_params = {
-            'draw_number': draw_data['draw_number'],
-            'draw_date': draw_data['draw_date'],
-            'white_balls': draw_data['white_balls'],
-            'powerball': draw_data['powerball'],
-            'jackpot_amount': draw_data.get('jackpot_amount', 0),
-            'winners': draw_data.get('winners', 0),
-            'source': draw_data.get('source', 'api')
-        }
-        
-        # Add to database with filtered parameters
-        new_draw = db.add_draw(**add_draw_params)
+        # Add to database
+        new_draw = db.add_draw(
+            draw_number=draw_data['draw_number'],
+            draw_date=draw_data['draw_date'],
+            white_balls=draw_data['white_balls'],
+            powerball=draw_data['powerball'],
+            jackpot_amount=draw_data.get('jackpot_amount', 0),
+            winners=draw_data.get('winners', 0),
+            source=draw_data.get('source', 'api')
+        )
         
         if not new_draw:
             raise HTTPException(status_code=500, detail="Failed to add draw to database")
@@ -569,8 +639,38 @@ async def scrape_historical(
         # Add draws to database
         new_draws = []
         for draw_data in draws:
+            # Log raw draw data
+            logger.debug(f"Raw historical draw data: {json.dumps(draw_data)}")
+            
+            # Validate draw data
+            if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
+                logger.error(f"Invalid draw_number: {draw_data['draw_number']}")
+                continue
+            if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
+                logger.error(f"Invalid draw_date: {draw_data['draw_date']}")
+                continue
+            if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
+                logger.error(f"Invalid white_balls: {draw_data['white_balls']}")
+                continue
+            if not all(isinstance(x, int) and 1 <= x <= 69 for x in draw_data['white_balls']):
+                logger.error(f"White balls out of range: {draw_data['white_balls']}")
+                continue
+            if len(set(draw_data['white_balls'])) != 5:
+                logger.error(f"Duplicate white balls: {draw_data['white_balls']}")
+                continue
+            if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
+                logger.error(f"Invalid powerball: {draw_data['powerball']}")
+                continue
+            if not isinstance(draw_data.get('jackpot_amount', 0), (int, float)) or draw_data.get('jackpot_amount', 0) < 0:
+                logger.error(f"Invalid jackpot_amount: {draw_data.get('jackpot_amount')}")
+                continue
+            if not isinstance(draw_data.get('winners', 0), int) or draw_data.get('winners', 0) < 0:
+                logger.error(f"Invalid winners: {draw_data.get('winners')}")
+                continue
+            
             existing = db.get_draw_by_number(draw_data['draw_number'])
             if existing:
+                logger.info(f"Draw {draw_data['draw_number']} already exists, skipping")
                 continue
                 
             new_draw = db.add_draw(
