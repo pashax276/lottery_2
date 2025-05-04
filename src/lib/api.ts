@@ -1,122 +1,92 @@
 // src/lib/api.ts
-// API client for Powerball Analyzer with enhanced logging
+// API client for Powerball Analyzer with enhanced logging and error handling
 
-// Get the API URL from environment variables or use a default
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-
-// Configure logging
 const LOG_LEVEL = 'info'; // 'debug', 'info', 'warn', 'error'
 
-// Simple logger for the frontend
+// Logger for frontend API interactions
 const logger = {
   debug: (message: string, data?: any) => {
-    if (['debug'].includes(LOG_LEVEL)) {
-      console.debug(`[API] ${message}`, data || '');
-    }
+    if (['debug'].includes(LOG_LEVEL)) console.debug(`[API] ${message}`, data || '');
   },
   info: (message: string, data?: any) => {
-    if (['debug', 'info'].includes(LOG_LEVEL)) {
-      console.info(`[API] ${message}`, data || '');
-    }
+    if (['debug', 'info'].includes(LOG_LEVEL)) console.info(`[API] ${message}`, data || '');
   },
   warn: (message: string, data?: any) => {
-    if (['debug', 'info', 'warn'].includes(LOG_LEVEL)) {
-      console.warn(`[API] ${message}`, data || '');
-    }
+    if (['debug', 'info', 'warn'].includes(LOG_LEVEL)) console.warn(`[API] ${message}`, data || '');
   },
   error: (message: string, data?: any) => {
-    if (['debug', 'info', 'warn', 'error'].includes(LOG_LEVEL)) {
-      console.error(`[API] ${message}`, data || '');
-    }
-  }
+    if (['debug', 'info', 'warn', 'error'].includes(LOG_LEVEL)) console.error(`[API] ${message}`, data || '');
+  },
 };
 
 // Helper to get auth token
-const getAuthToken = (): string | null => {
-  return localStorage.getItem('token');
-};
+const getAuthToken = (): string | null => localStorage.getItem('token');
 
 // Helper to get headers with auth token if available
 const getHeaders = (includeAuth: boolean = true): HeadersInit => {
-  const headers: HeadersInit = {
-    'Content-Type': 'application/json',
-  };
-
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
   if (includeAuth) {
     const token = getAuthToken();
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
+    if (token) headers['Authorization'] = `Bearer ${token}`;
   }
-
   return headers;
 };
 
-// Generic fetch with logging
+// Generic fetch with logging and enhanced error handling
 const fetchWithLogging = async (
-  url: string, 
+  url: string,
   options: RequestInit,
   skipAuthRedirect: boolean = false
 ): Promise<any> => {
   const fullUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
-  
-  // Log request
   logger.info(`Request: ${options.method} ${fullUrl}`, {
     headers: options.headers,
-    body: options.body
+    body: options.body,
   });
-  
+
   try {
     const response = await fetch(fullUrl, options);
-    
-    // Clone the response to read it twice (once for logging, once for return)
     let clonedResponse;
     try {
       clonedResponse = response.clone();
     } catch (e) {
-      // If response can't be cloned (e.g. already consumed), continue without logging response body
       logger.warn('Could not clone response for logging', e);
     }
-    
-    // Check for authentication issues
+
     if (response.status === 401 && !skipAuthRedirect) {
       logger.warn('Authentication required - redirecting to login');
-      // Clear auth token and redirect to login
       localStorage.removeItem('token');
+      localStorage.removeItem('user_id');
+      localStorage.removeItem('username');
       window.location.href = '/login';
       throw new Error('Authentication required');
     }
-    
-    // Check if response is ok
+
     if (!response.ok) {
       const errorData = await response.text();
       logger.error(`Response error: ${response.status} ${response.statusText}`, errorData);
       throw new Error(errorData || `Request failed with status ${response.status}`);
     }
-    
-    // Log response
+
     if (clonedResponse) {
       try {
         const responseData = await clonedResponse.json();
         logger.info(`Response: ${response.status}`, responseData);
       } catch (e) {
-        // If response can't be parsed as JSON, log text
         const responseText = await clonedResponse.text();
-        logger.info(`Response: ${response.status}`, responseText.length > 500 ? 
-          responseText.substring(0, 500) + '... [truncated]' : responseText);
+        logger.info(
+          `Response: ${response.status}`,
+          responseText.length > 500 ? responseText.substring(0, 500) + '... [truncated]' : responseText
+        );
       }
     } else {
       logger.info(`Response: ${response.status}`, 'Body already consumed');
     }
-    
+
     return response.json();
   } catch (error) {
-    // If error is already handled (like 401), just rethrow
-    if (error instanceof Error && error.message === 'Authentication required') {
-      throw error;
-    }
-    
-    // Log error
+    if (error instanceof Error && error.message === 'Authentication required') throw error;
     logger.error('Fetch error', error);
     throw error;
   }
@@ -132,54 +102,38 @@ export function validateDrawParameters(
   powerball: number | string
 ): { isValid: boolean; errors: string[] } {
   const errors: string[] = [];
-  
-  // Convert to numbers for validation
   const numDrawNumber = typeof drawNumber === 'string' ? parseInt(drawNumber, 10) : drawNumber;
-  const numWhiteBalls = whiteBalls.map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball);
+  const numWhiteBalls = whiteBalls.map(ball => (typeof ball === 'string' ? parseInt(ball, 10) : ball));
   const numPowerball = typeof powerball === 'string' ? parseInt(powerball, 10) : powerball;
-  
-  // Check draw number
+
   if (isNaN(numDrawNumber) || numDrawNumber <= 0) {
     errors.push('Draw number must be a positive number');
   }
-  
-  // Check draw date
+
   if (!drawDate) {
     errors.push('Draw date is required');
-  } else {
-    // Validate date format (YYYY-MM-DD)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(drawDate)) {
-      errors.push('Draw date must be in YYYY-MM-DD format');
-    }
+  } else if (!/^\d{4}-\d{2}-\d{2}$/.test(drawDate)) {
+    errors.push('Draw date must be in YYYY-MM-DD format');
   }
-  
-  // Check white balls
+
   if (numWhiteBalls.length !== 5) {
     errors.push('Exactly 5 white balls are required');
   } else {
-    // Check white ball ranges
     for (let i = 0; i < numWhiteBalls.length; i++) {
       if (isNaN(numWhiteBalls[i]) || numWhiteBalls[i] < 1 || numWhiteBalls[i] > 69) {
         errors.push(`White ball #${i + 1} must be between 1 and 69`);
       }
     }
-    
-    // Check for duplicates
-    const uniqueWhiteBalls = new Set(numWhiteBalls);
-    if (uniqueWhiteBalls.size !== 5) {
+    if (new Set(numWhiteBalls).size !== 5) {
       errors.push('White balls must be unique');
     }
   }
-  
-  // Check powerball
+
   if (isNaN(numPowerball) || numPowerball < 1 || numPowerball > 26) {
     errors.push('Powerball must be between 1 and 26');
   }
-  
-  return {
-    isValid: errors.length === 0,
-    errors
-  };
+
+  return { isValid: errors.length === 0, errors };
 }
 
 /**
@@ -194,14 +148,10 @@ export async function addDraw(
   winners: number = 0
 ) {
   logger.info('Adding new draw', { drawNumber, drawDate, whiteBalls, powerball });
-  
-  // Make sure white balls are sorted before sending
   const sortedWhiteBalls = [...whiteBalls].sort((a, b) => a - b);
-  
-  // Ensure we have proper date format (YYYY-MM-DD)
   let formattedDate = drawDate;
+
   if (!drawDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    // Try to convert MM/DD/YYYY to YYYY-MM-DD
     const dateParts = drawDate.split('/');
     if (dateParts.length === 3) {
       const month = dateParts[0].padStart(2, '0');
@@ -210,45 +160,28 @@ export async function addDraw(
       formattedDate = `${year}-${month}-${day}`;
     }
   }
-  
-  // Validate parameters
+
   const validation = validateDrawParameters(drawNumber, formattedDate, sortedWhiteBalls, powerball);
   if (!validation.isValid) {
     logger.error('Validation failed for addDraw', validation.errors);
     throw new Error(validation.errors.join('; '));
   }
-  
-  // Add proper error handling
+
   try {
-    const response = await fetch(`${API_URL}/api/draws/add`, {
+    const response = await fetchWithLogging('/api/draws/add', {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({
         draw_number: drawNumber,
         draw_date: formattedDate,
         white_balls: sortedWhiteBalls,
-        powerball: powerball,
+        powerball,
         jackpot_amount: jackpotAmount,
-        winners: winners,
+        winners,
       }),
     });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`Failed to add draw ${drawNumber}`, errorText);
-      throw new Error(errorText || `Request failed with status ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    // Verify the response
-    if (!data.success) {
-      logger.error(`Failed to add draw ${drawNumber}`, data.detail);
-      throw new Error(data.detail || 'Failed to add draw');
-    }
-    
-    logger.info(`Successfully added draw ${drawNumber}`, data);
-    return data;
+    logger.info(`Successfully added draw ${drawNumber}`, response);
+    return response;
   } catch (error) {
     logger.error('Error adding draw:', error);
     throw error;
@@ -258,20 +191,15 @@ export async function addDraw(
 /**
  * Check numbers against a draw
  */
-export async function checkNumbers(
-  userId: string,
-  drawNumber: number,
-  numbers: number[]
-) {
+export async function checkNumbers(userId: string, drawNumber: number, numbers: number[]) {
   logger.info('Checking numbers', { userId, drawNumber, numbers });
-  
   return fetchWithLogging('/api/check_numbers', {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
       user_id: userId,
       draw_number: drawNumber,
-      numbers: numbers,
+      numbers,
     }),
   });
 }
@@ -281,8 +209,18 @@ export async function checkNumbers(
  */
 export async function scrapePowerball() {
   logger.info('Scraping latest Powerball data');
-  
   return fetchWithLogging('/api/scrape/latest', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+/**
+ * Scrape historical Powerball draws
+ */
+export async function scrapeHistoricalDraws(count: number = 20) {
+  logger.info('Scraping historical Powerball data', { count });
+  return fetchWithLogging(`/api/scrape/historical?count=${count}`, {
     method: 'POST',
     headers: getHeaders(),
   });
@@ -291,17 +229,13 @@ export async function scrapePowerball() {
 /**
  * Generate a prediction
  */
-export async function generatePrediction(
-  method: string = 'frequency',
-  userId: string = 'anonymous'
-) {
+export async function generatePrediction(method: string = 'frequency', userId: string = 'anonymous') {
   logger.info('Generating prediction', { method, userId });
-  
   return fetchWithLogging('/api/predictions', {
     method: 'POST',
     headers: getHeaders(),
     body: JSON.stringify({
-      method: method,
+      method,
       user_id: userId,
     }),
   });
@@ -312,7 +246,6 @@ export async function generatePrediction(
  */
 export async function getFrequencyAnalysis() {
   logger.info('Getting frequency analysis');
-  
   return fetchWithLogging('/api/insights/frequency', {
     method: 'GET',
     headers: getHeaders(false),
@@ -324,7 +257,6 @@ export async function getFrequencyAnalysis() {
  */
 export async function getHotNumbers() {
   logger.info('Getting hot numbers');
-  
   return fetchWithLogging('/api/insights/hot', {
     method: 'GET',
     headers: getHeaders(false),
@@ -336,10 +268,84 @@ export async function getHotNumbers() {
  */
 export async function getDueNumbers() {
   logger.info('Getting due numbers');
-  
   return fetchWithLogging('/api/insights/due', {
     method: 'GET',
     headers: getHeaders(false),
+  });
+}
+
+/**
+ * Get pair analysis
+ */
+export async function getPairs() {
+  logger.info('Getting pair analysis');
+  return fetchWithLogging('/api/insights/pairs', {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
+}
+
+/**
+ * Get position analysis
+ */
+export async function getPositions() {
+  logger.info('Getting position analysis');
+  return fetchWithLogging('/api/insights/positions', {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
+}
+
+/**
+ * Get cluster analysis
+ */
+export async function getClusters() {
+  logger.info('Getting cluster analysis');
+  return fetchWithLogging('/api/insights/cluster', {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
+}
+
+/**
+ * Get number gap analysis
+ */
+export async function getNumberAnalysis(number: number) {
+  logger.info('Getting number gap analysis', { number });
+  return fetchWithLogging('/api/insights/number', {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({ number }),
+  });
+}
+
+/**
+ * Save custom combination
+ */
+export async function saveCombination(whiteBalls: number[], powerball: number, score: number = 0.5, method: string = 'user_custom', reason: string = 'User-defined combination') {
+  logger.info('Saving custom combination', { whiteBalls, powerball, method });
+  return fetchWithLogging('/api/combinations/update', {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      white_balls: whiteBalls,
+      powerball,
+      score,
+      method,
+      reason,
+    }),
+  });
+}
+
+/**
+ * Save user settings
+ */
+export async function saveUserSettings(settings: any) {
+  logger.info('Saving user settings');
+  return fetchWithLogging('/api/user_settings', {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify(settings),
   });
 }
 
@@ -348,7 +354,6 @@ export async function getDueNumbers() {
  */
 export async function getDraws(limit: number = 1000, offset: number = 0) {
   logger.info('Getting all draws', { limit, offset });
-  
   return fetchWithLogging(`/api/draws?limit=${limit}&offset=${offset}`, {
     method: 'GET',
     headers: getHeaders(false),
@@ -360,7 +365,6 @@ export async function getDraws(limit: number = 1000, offset: number = 0) {
  */
 export async function getLatestDraw() {
   logger.info('Getting latest draw');
-  
   return fetchWithLogging('/api/draws/latest', {
     method: 'GET',
     headers: getHeaders(false),
@@ -372,7 +376,6 @@ export async function getLatestDraw() {
  */
 export async function getDrawByNumber(drawNumber: number) {
   logger.info('Getting draw by number', { drawNumber });
-  
   return fetchWithLogging(`/api/draws/${drawNumber}`, {
     method: 'GET',
     headers: getHeaders(false),
@@ -384,23 +387,19 @@ export async function getDrawByNumber(drawNumber: number) {
  */
 export async function updateDrawWinner(drawId: string, isWinner: boolean) {
   logger.info('Updating draw winner status', { drawId, isWinner });
-  
   return fetchWithLogging(`/api/draws/${drawId}/winner`, {
     method: 'PUT',
     headers: getHeaders(),
-    body: JSON.stringify({
-      is_winner: isWinner
-    }),
+    body: JSON.stringify({ is_winner: isWinner }),
   });
 }
 
 /**
  * Get predictions
  */
-export async function getPredictions(method: string = 'all') {
-  logger.info('Getting predictions', { method });
-  
-  return fetchWithLogging(`/api/predictions?method=${method}`, {
+export async function getPredictions(method: string = 'all', limit: number = 10, offset: number = 0) {
+  logger.info('Getting predictions', { method, limit, offset });
+  return fetchWithLogging(`/api/predictions?method=${method}&limit=${limit}&offset=${offset}`, {
     method: 'GET',
     headers: getHeaders(false),
   });
@@ -411,10 +410,53 @@ export async function getPredictions(method: string = 'all') {
  */
 export async function getUserStats(userId: string = 'anonymous') {
   logger.info('Getting user stats', { userId });
-  
   return fetchWithLogging(`/api/user_stats?user_id=${userId}`, {
     method: 'GET',
     headers: getHeaders(),
+  });
+}
+
+/**
+ * Get user checks
+ */
+export async function getUserChecks(userId: string = 'anonymous', limit: number = 10, offset: number = 0) {
+  logger.info('Getting user checks', { userId, limit, offset });
+  return fetchWithLogging(`/api/user_checks?user_id=${userId}&limit=${limit}&offset=${offset}`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+}
+
+/**
+ * Reset database schema
+ */
+export async function resetDatabaseSchema() {
+  logger.info('Resetting database schema');
+  return fetchWithLogging('/api/db/reset', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+/**
+ * Get health status
+ */
+export async function getHealthStatus() {
+  logger.info('Checking API health');
+  return fetchWithLogging('/api/health', {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
+}
+
+/**
+ * Get ideas (placeholder for feature suggestions)
+ */
+export async function getIdeas() {
+  logger.info('Getting ideas');
+  return fetchWithLogging('/api/ideas', {
+    method: 'GET',
+    headers: getHeaders(false),
   });
 }
 
@@ -423,7 +465,6 @@ export async function getUserStats(userId: string = 'anonymous') {
  */
 export async function login(username: string, password: string) {
   logger.info('User login attempt', { username });
-  
   const formData = new URLSearchParams();
   formData.append('username', username);
   formData.append('password', password);
@@ -431,9 +472,7 @@ export async function login(username: string, password: string) {
   try {
     const response = await fetch(`${API_URL}/api/auth/token`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData,
     });
 
@@ -445,12 +484,9 @@ export async function login(username: string, password: string) {
 
     const data = await response.json();
     logger.info('Login successful', { username, userId: data.user_id });
-    
-    // Save auth data to localStorage
     localStorage.setItem('token', data.access_token);
     localStorage.setItem('user_id', data.user_id.toString());
     localStorage.setItem('username', data.username);
-    
     return data;
   } catch (error) {
     logger.error('Login error', error);
@@ -463,18 +499,11 @@ export async function login(username: string, password: string) {
  */
 export async function register(username: string, password: string, email?: string) {
   logger.info('User registration attempt', { username, email });
-  
   try {
     const response = await fetch(`${API_URL}/api/auth/register`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        username,
-        password,
-        email,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, email }),
     });
 
     if (!response.ok) {
@@ -485,7 +514,6 @@ export async function register(username: string, password: string, email?: strin
 
     const data = await response.json();
     logger.info('Registration successful', { username, userId: data.id });
-    
     return data;
   } catch (error) {
     logger.error('Registration error', error);
@@ -499,12 +527,9 @@ export async function register(username: string, password: string, email?: strin
 export function logout() {
   const username = localStorage.getItem('username');
   logger.info('User logout', { username });
-  
   localStorage.removeItem('token');
   localStorage.removeItem('user_id');
   localStorage.removeItem('username');
-  
-  // Redirect to login page
   window.location.href = '/login';
 }
 
@@ -523,16 +548,54 @@ export function isAuthenticated(): boolean {
 export function getCurrentUser() {
   const userId = localStorage.getItem('user_id');
   const username = localStorage.getItem('username');
-  
   if (!userId || !username) {
     logger.debug('Get current user: No user logged in');
     return null;
   }
-  
   logger.debug('Get current user', { userId, username });
-  
-  return {
-    id: parseInt(userId),
-    username,
-  };
+  return { id: parseInt(userId), username };
+}
+
+/**
+ * Get current user info from server
+ */
+export async function getCurrentUserServer() {
+  logger.info('Getting current user from server');
+  return fetchWithLogging('/api/auth/me', {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+}
+
+/**
+ * Get all insights summary
+ */
+export async function getAllInsights() {
+  logger.info('Getting all insights');
+  return fetchWithLogging('/api/insights/all', {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
+}
+
+/**
+ * Run analytics tasks
+ */
+export async function runAnalytics() {
+  logger.info('Running analytics tasks');
+  return fetchWithLogging('/api/analytics/run', {
+    method: 'POST',
+    headers: getHeaders(),
+  });
+}
+
+/**
+ * Get top combinations
+ */
+export async function getTopCombinations(limit: number = 10) {
+  logger.info('Getting top combinations', { limit });
+  return fetchWithLogging(`/api/combinations?limit=${limit}`, {
+    method: 'GET',
+    headers: getHeaders(false),
+  });
 }

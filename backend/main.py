@@ -1,8 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator, Field
 from typing import List, Optional, Dict, Any
+from socketio import AsyncServer, ASGIApp
+import socketio
 import os
 import logging
 import asyncio
@@ -219,17 +222,21 @@ async def lifespan(app: FastAPI):
         app.state.db.close()
 
 # Create FastAPI app
+sio = AsyncServer(async_mode='asgi', cors_allowed_origins='*')
 app = FastAPI(
     title="Powerball Analyzer API",
     description="API for analyzing and predicting Powerball lottery results",
     version="1.0.0",
     lifespan=lifespan
 )
+socket_app = ASGIApp(sio)
+app.mount("/socket.io", socket_app)
+app.mount("/figures", StaticFiles(directory="data/figures"), name="figures")
 
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins temporarily for debugging
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -445,6 +452,9 @@ async def add_draw(
                 raise HTTPException(status_code=500, detail="Database connection failed")
             raise HTTPException(status_code=400, detail=f"Failed to add draw {draw.draw_number}: Draw may already exist or invalid data provided")
         
+        # Broadcast new draw to WebSocket clients
+        await sio.emit('new_draw', result)
+        
         if user_id > 0:
             try:
                 db.update_user_stat(user_id, 'draws_added')
@@ -611,6 +621,9 @@ async def scrape_latest(background_tasks: BackgroundTasks):
         if not new_draw:
             raise HTTPException(status_code=500, detail="Failed to add draw to database")
         
+        # Broadcast new draw to WebSocket clients
+        await sio.emit('new_draw', new_draw)
+        
         # Schedule analytics updates
         background_tasks.add_task(run_analytics_tasks)
         
@@ -684,6 +697,8 @@ async def scrape_historical(
             )
             
             if new_draw:
+                # Broadcast new draw to WebSocket clients
+                await sio.emit('new_draw', new_draw)
                 new_draws.append(new_draw)
         
         if new_draws:

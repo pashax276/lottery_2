@@ -605,7 +605,7 @@ class PowerballAnalytics:
             # Prepare white ball data
             white_balls = []
             for _, row in df.iterrows():
-                white_balls.extend([row['wb1'], row['wb2'], row['wb3'], row['wb4'], row['wb5']])
+                white_balls.extend([row['wb1'], row['wb2'], row['wb3'], row['wb4', 'wb5']])
             
             # Convert to numpy array
             X = np.array(white_balls).reshape(-1, 1)
@@ -665,7 +665,7 @@ class PowerballAnalytics:
             fig_path = self.generate_cluster_visualization(X, labels, centers)
             
             if fig_path:
-                result['visualization'] = fig_path
+                result['visualization'] = f"/figures/{os.path.basename(fig_path)}"
             
             return {'success': True, 'result': result}
             
