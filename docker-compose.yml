@@ -1,14 +1,16 @@
+version: '3.8'
+
 services:
   frontend:
     build:
       context: .
-      target: frontend
+      dockerfile: Dockerfile.frontend
       args:
-        - VITE_API_URL=http://localhost:5001
+        - VITE_API_URL=http://backend:5001
     ports:
       - "80:80"
     environment:
-      - VITE_API_URL=http://localhost:5001
+      - VITE_API_URL=http://backend:5001
     depends_on:
       - backend
     networks:
@@ -18,7 +20,7 @@ services:
   backend:
     build:
       context: .
-      target: backend
+      dockerfile: Dockerfile.backend
     ports:
       - "5001:5001"
     environment:
@@ -79,4 +81,4 @@ networks:
 volumes:
   backend-data:
   postgres-data:
-    name: powerball_postgres_data  # Explicitly name the volume
+    name: powerball_postgres_data
