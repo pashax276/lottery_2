@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Lock, User } from 'lucide-react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+// Use relative URL for API calls - nginx will proxy to backend
+const API_URL = '';
 
 interface LoginProps {
   onLogin: (token: string, userId: number, username: string) => void;
@@ -20,8 +21,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setLoading(true);
     setError(null);
 
+    console.log('Login form submitted');
+    console.log('Username:', username);
+    console.log('API URL:', API_URL);
+
     try {
       if (isRegister) {
+        console.log('Attempting registration...');
         // Register new user
         const registerResponse = await fetch(`${API_URL}/api/auth/register`, {
           method: 'POST',
@@ -35,8 +41,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           }),
         });
 
+        console.log('Register response status:', registerResponse.status);
+
         if (!registerResponse.ok) {
           const errorData = await registerResponse.text();
+          console.error('Registration failed:', errorData);
           throw new Error(errorData || 'Registration failed');
         }
 
@@ -47,10 +56,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         return;
       }
 
+      console.log('Attempting login...');
+      console.log('Login URL:', `${API_URL}/api/auth/token`);
+      
       // Login
       const formData = new URLSearchParams();
       formData.append('username', username);
       formData.append('password', password);
+
+      console.log('Form data:', formData.toString());
 
       const response = await fetch(`${API_URL}/api/auth/token`, {
         method: 'POST',
@@ -60,21 +74,33 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         body: formData,
       });
 
+      console.log('Login response status:', response.status);
+      console.log('Login response headers:', Object.fromEntries(response.headers.entries()));
+
       if (!response.ok) {
         const errorData = await response.text();
+        console.error('Login failed:', errorData);
         throw new Error(errorData || 'Login failed');
       }
 
       const data = await response.json();
+      console.log('Login successful, response data:', data);
       
       // Save token to localStorage
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user_id', data.user_id.toString());
       localStorage.setItem('username', data.username);
       
+      console.log('Saved to localStorage:', {
+        token: localStorage.getItem('token'),
+        user_id: localStorage.getItem('user_id'),
+        username: localStorage.getItem('username')
+      });
+      
       // Call onLogin callback
       onLogin(data.access_token, data.user_id, data.username);
     } catch (err) {
+      console.error('Login error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);

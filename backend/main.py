@@ -1,12 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator, Field
 from typing import List, Optional, Dict, Any
 from socketio import AsyncServer, ASGIApp
-import socketio
 import os
+import time
 import logging
 import asyncio
 from datetime import datetime, timedelta
@@ -233,14 +233,52 @@ socket_app = ASGIApp(sio)
 app.mount("/socket.io", socket_app)
 app.mount("/figures", StaticFiles(directory="data/figures"), name="figures")
 
-# Configure CORS
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    # Log request details
+    logger.info(f"Request started: {request.method} {request.url.path}")
+    
+    if request.headers:
+        logger.debug(f"Headers: {dict(request.headers)}")
+    
+    try:
+        # Get body if it's a POST/PUT request
+        if request.method in ["POST", "PUT"] and request.headers.get("content-type") == "application/json":
+            body = await request.body()
+            if body:
+                logger.debug(f"Request body: {body.decode('utf-8')[:1000]}")  # Limit to 1000 chars
+            # Recreate the request since we consumed the body
+            from starlette.datastructures import Headers
+            from starlette.requests import Request as StarletteRequest
+            request = StarletteRequest(
+                scope=request.scope,
+                receive=request.receive,
+                send=request._send
+            )
+    except Exception as e:
+        logger.error(f"Error logging request body: {e}")
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Calculate process time
+    process_time = time.time() - start_time
+    logger.info(f"Request completed: {request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.3f}s")
+    
+    return response
+
+# Configure CORS with logging
+logger.info("Configuring CORS middleware")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, specify your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+logger.info("CORS configured to allow all origins")
 
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token", auto_error=False)
@@ -283,28 +321,43 @@ async def register_user(user_data: UserCreate):
 
 @app.post("/api/auth/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
+    logger.info(f"Login attempt for user: {form_data.username}")
     
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    try:
+        user = authenticate_user(form_data.username, form_data.password)
+        
+        if not user:
+            logger.warning(f"Login failed for user: {form_data.username} - Invalid credentials")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=60 * 24)  # 1 day
+        access_token = create_access_token(
+            data={"sub": user["username"], "user_id": user["id"]},
+            expires_delta=access_token_expires
         )
+        
+        logger.info(f"Login successful for user: {form_data.username}")
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user_id": user["id"],
+            "username": user["username"]
+        }
     
-    # Create access token
-    access_token_expires = timedelta(minutes=60 * 24)  # 1 day
-    access_token = create_access_token(
-        data={"sub": user["username"], "user_id": user["id"]},
-        expires_delta=access_token_expires
-    )
-    
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user_id": user["id"],
-        "username": user["username"]
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error for user {form_data.username}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during login"
+        )
 
 @app.get("/api/auth/me", response_model=User)
 async def read_users_me(current_user: Dict[str, Any] = Depends(get_current_user)):

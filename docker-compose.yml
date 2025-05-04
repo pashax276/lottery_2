@@ -5,12 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-      args:
-        - VITE_API_URL=http://backend:5001
     ports:
       - "80:80"
     environment:
-      - VITE_API_URL=http://backend:5001
+      - NODE_ENV=production
     depends_on:
       - backend
     networks:
@@ -28,19 +26,25 @@ services:
       - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
       - DEBUG_NO_FALLBACK=true
       - PORT=5001
-      - LOG_LEVEL=info
+      - LOG_LEVEL=debug  # Changed to debug for more logs
       - SECRET_KEY=powerball_secret_key_change_in_production
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=powerball_admin
       - ADMIN_EMAIL=admin@example.com
       - ENABLE_SCHEDULER=true
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - powerball-network
     volumes:
       - backend-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   db:
     image: postgres:14-alpine
