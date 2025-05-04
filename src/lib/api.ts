@@ -1,61 +1,73 @@
 // src/lib/api.ts
-// API client for Powerball Analyzer with enhanced logging and error handling
+// API client for Powerball Analyzer with comprehensive debug logging
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-const LOG_LEVEL = 'info'; // 'debug', 'info', 'warn', 'error'
-
-// Logger for frontend API interactions
-const logger = {
-  debug: (message: string, data?: any) => {
-    if (['debug'].includes(LOG_LEVEL)) console.debug(`[API] ${message}`, data || '');
-  },
-  info: (message: string, data?: any) => {
-    if (['debug', 'info'].includes(LOG_LEVEL)) console.info(`[API] ${message}`, data || '');
-  },
-  warn: (message: string, data?: any) => {
-    if (['debug', 'info', 'warn'].includes(LOG_LEVEL)) console.warn(`[API] ${message}`, data || '');
-  },
-  error: (message: string, data?: any) => {
-    if (['debug', 'info', 'warn', 'error'].includes(LOG_LEVEL)) console.error(`[API] ${message}`, data || '');
-  },
+// Debug helper
+const DEBUG = true;
+const debugLog = (context: string, message: string, data?: any) => {
+  if (DEBUG) {
+    console.log(`[API:${context}] ${message}`, data || '');
+  }
 };
 
+// Use relative URL for API calls - nginx will proxy to backend
+const API_URL = import.meta.env.VITE_API_URL || '';
+debugLog('Init', 'API_URL:', API_URL);
+debugLog('Init', 'Environment variables:', import.meta.env);
+
 // Helper to get auth token
-const getAuthToken = (): string | null => localStorage.getItem('token');
+const getAuthToken = (): string | null => {
+  const token = localStorage.getItem('token');
+  debugLog('Auth', 'Retrieved token:', token ? 'Token exists' : 'No token');
+  return token;
+};
 
 // Helper to get headers with auth token if available
 const getHeaders = (includeAuth: boolean = true): HeadersInit => {
+  debugLog('Headers', `Creating headers (includeAuth: ${includeAuth})`);
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
   if (includeAuth) {
     const token = getAuthToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      debugLog('Headers', 'Added auth token to headers');
+    }
   }
+  debugLog('Headers', 'Final headers:', headers);
   return headers;
 };
 
-// Generic fetch with logging and enhanced error handling
+// Generic fetch with comprehensive logging
 const fetchWithLogging = async (
-  url: string,
+  endpoint: string,
   options: RequestInit,
   skipAuthRedirect: boolean = false
 ): Promise<any> => {
-  const fullUrl = url.startsWith('http') ? url : `${API_URL}${url}`;
-  logger.info(`Request: ${options.method} ${fullUrl}`, {
+  const url = `${API_URL}${endpoint}`;
+  const fullUrl = window.location.origin + url;
+  
+  debugLog('Fetch', 'Starting request', {
+    endpoint,
+    url,
+    fullUrl,
+    method: options.method,
     headers: options.headers,
-    body: options.body,
+    body: options.body
   });
 
   try {
-    const response = await fetch(fullUrl, options);
-    let clonedResponse;
-    try {
-      clonedResponse = response.clone();
-    } catch (e) {
-      logger.warn('Could not clone response for logging', e);
-    }
+    debugLog('Fetch', 'Calling fetch()...');
+    const response = await fetch(url, options);
+    
+    debugLog('Fetch', 'Response received', {
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+      type: response.type,
+      headers: Object.fromEntries(response.headers.entries())
+    });
 
     if (response.status === 401 && !skipAuthRedirect) {
-      logger.warn('Authentication required - redirecting to login');
+      debugLog('Fetch', 'Authentication required - redirecting to login');
       localStorage.removeItem('token');
       localStorage.removeItem('user_id');
       localStorage.removeItem('username');
@@ -64,30 +76,36 @@ const fetchWithLogging = async (
     }
 
     if (!response.ok) {
+      debugLog('Fetch', 'Response not OK, reading error text...');
       const errorData = await response.text();
-      logger.error(`Response error: ${response.status} ${response.statusText}`, errorData);
+      debugLog('Fetch', 'Error response:', errorData);
       throw new Error(errorData || `Request failed with status ${response.status}`);
     }
 
-    if (clonedResponse) {
-      try {
-        const responseData = await clonedResponse.json();
-        logger.info(`Response: ${response.status}`, responseData);
-      } catch (e) {
-        const responseText = await clonedResponse.text();
-        logger.info(
-          `Response: ${response.status}`,
-          responseText.length > 500 ? responseText.substring(0, 500) + '... [truncated]' : responseText
-        );
-      }
-    } else {
-      logger.info(`Response: ${response.status}`, 'Body already consumed');
-    }
-
-    return response.json();
+    debugLog('Fetch', 'Parsing JSON response...');
+    const data = await response.json();
+    debugLog('Fetch', 'Response data:', data);
+    return data;
   } catch (error) {
-    if (error instanceof Error && error.message === 'Authentication required') throw error;
-    logger.error('Fetch error', error);
+    debugLog('Fetch', 'Error caught', {
+      name: error instanceof Error ? error.name : 'Unknown',
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+    
+    if (error instanceof Error && error.message === 'Authentication required') {
+      throw error;
+    }
+    
+    if (error instanceof TypeError && error.message === 'Failed to fetch') {
+      debugLog('Fetch', 'Network error - possible causes:', {
+        'CORS': 'Check if backend allows requests from frontend origin',
+        'Backend down': 'Check if backend is running',
+        'Proxy': 'Check nginx proxy configuration',
+        'URL': `Tried to fetch: ${url}`
+      });
+    }
+    
     throw error;
   }
 };
@@ -147,7 +165,8 @@ export async function addDraw(
   jackpotAmount: number = 0,
   winners: number = 0
 ) {
-  logger.info('Adding new draw', { drawNumber, drawDate, whiteBalls, powerball });
+  debugLog('addDraw', 'Starting addDraw', { drawNumber, drawDate, whiteBalls, powerball });
+  
   const sortedWhiteBalls = [...whiteBalls].sort((a, b) => a - b);
   let formattedDate = drawDate;
 
@@ -163,7 +182,7 @@ export async function addDraw(
 
   const validation = validateDrawParameters(drawNumber, formattedDate, sortedWhiteBalls, powerball);
   if (!validation.isValid) {
-    logger.error('Validation failed for addDraw', validation.errors);
+    debugLog('addDraw', 'Validation failed', validation.errors);
     throw new Error(validation.errors.join('; '));
   }
 
@@ -180,10 +199,10 @@ export async function addDraw(
         winners,
       }),
     });
-    logger.info(`Successfully added draw ${drawNumber}`, response);
+    debugLog('addDraw', 'Success', response);
     return response;
   } catch (error) {
-    logger.error('Error adding draw:', error);
+    debugLog('addDraw', 'Error', error);
     throw error;
   }
 }
@@ -192,304 +211,473 @@ export async function addDraw(
  * Check numbers against a draw
  */
 export async function checkNumbers(userId: string, drawNumber: number, numbers: number[]) {
-  logger.info('Checking numbers', { userId, drawNumber, numbers });
-  return fetchWithLogging('/api/check_numbers', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      user_id: userId,
-      draw_number: drawNumber,
-      numbers,
-    }),
-  });
+  debugLog('checkNumbers', 'Starting checkNumbers', { userId, drawNumber, numbers });
+  try {
+    const result = await fetchWithLogging('/api/check_numbers', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        user_id: userId,
+        draw_number: drawNumber,
+        numbers,
+      }),
+    });
+    debugLog('checkNumbers', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('checkNumbers', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Scrape the latest Powerball draw
  */
 export async function scrapePowerball() {
-  logger.info('Scraping latest Powerball data');
-  return fetchWithLogging('/api/scrape/latest', {
-    method: 'POST',
-    headers: getHeaders(),
-  });
+  debugLog('scrapePowerball', 'Starting scrapePowerball');
+  try {
+    const result = await fetchWithLogging('/api/scrape/latest', {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    debugLog('scrapePowerball', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('scrapePowerball', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Scrape historical Powerball draws
  */
 export async function scrapeHistoricalDraws(count: number = 20) {
-  logger.info('Scraping historical Powerball data', { count });
-  return fetchWithLogging(`/api/scrape/historical?count=${count}`, {
-    method: 'POST',
-    headers: getHeaders(),
-  });
+  debugLog('scrapeHistoricalDraws', 'Starting scrapeHistoricalDraws', { count });
+  try {
+    const result = await fetchWithLogging(`/api/scrape/historical?count=${count}`, {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    debugLog('scrapeHistoricalDraws', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('scrapeHistoricalDraws', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Generate a prediction
  */
 export async function generatePrediction(method: string = 'frequency', userId: string = 'anonymous') {
-  logger.info('Generating prediction', { method, userId });
-  return fetchWithLogging('/api/predictions', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      method,
-      user_id: userId,
-    }),
-  });
+  debugLog('generatePrediction', 'Starting generatePrediction', { method, userId });
+  try {
+    const result = await fetchWithLogging('/api/predictions', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        method,
+        user_id: userId,
+      }),
+    });
+    debugLog('generatePrediction', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('generatePrediction', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get frequency analysis
  */
 export async function getFrequencyAnalysis() {
-  logger.info('Getting frequency analysis');
-  return fetchWithLogging('/api/insights/frequency', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getFrequencyAnalysis', 'Starting getFrequencyAnalysis');
+  try {
+    const result = await fetchWithLogging('/api/insights/frequency', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getFrequencyAnalysis', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getFrequencyAnalysis', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get hot numbers
  */
 export async function getHotNumbers() {
-  logger.info('Getting hot numbers');
-  return fetchWithLogging('/api/insights/hot', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getHotNumbers', 'Starting getHotNumbers');
+  try {
+    const result = await fetchWithLogging('/api/insights/hot', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getHotNumbers', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getHotNumbers', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get due numbers
  */
 export async function getDueNumbers() {
-  logger.info('Getting due numbers');
-  return fetchWithLogging('/api/insights/due', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getDueNumbers', 'Starting getDueNumbers');
+  try {
+    const result = await fetchWithLogging('/api/insights/due', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getDueNumbers', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getDueNumbers', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get pair analysis
  */
 export async function getPairs() {
-  logger.info('Getting pair analysis');
-  return fetchWithLogging('/api/insights/pairs', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getPairs', 'Starting getPairs');
+  try {
+    const result = await fetchWithLogging('/api/insights/pairs', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getPairs', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getPairs', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get position analysis
  */
 export async function getPositions() {
-  logger.info('Getting position analysis');
-  return fetchWithLogging('/api/insights/positions', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getPositions', 'Starting getPositions');
+  try {
+    const result = await fetchWithLogging('/api/insights/positions', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getPositions', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getPositions', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get cluster analysis
  */
 export async function getClusters() {
-  logger.info('Getting cluster analysis');
-  return fetchWithLogging('/api/insights/cluster', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getClusters', 'Starting getClusters');
+  try {
+    const result = await fetchWithLogging('/api/insights/cluster', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getClusters', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getClusters', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get number gap analysis
  */
 export async function getNumberAnalysis(number: number) {
-  logger.info('Getting number gap analysis', { number });
-  return fetchWithLogging('/api/insights/number', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ number }),
-  });
+  debugLog('getNumberAnalysis', 'Starting getNumberAnalysis', { number });
+  try {
+    const result = await fetchWithLogging('/api/insights/number', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ number }),
+    });
+    debugLog('getNumberAnalysis', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getNumberAnalysis', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Save custom combination
  */
 export async function saveCombination(whiteBalls: number[], powerball: number, score: number = 0.5, method: string = 'user_custom', reason: string = 'User-defined combination') {
-  logger.info('Saving custom combination', { whiteBalls, powerball, method });
-  return fetchWithLogging('/api/combinations/update', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({
-      white_balls: whiteBalls,
-      powerball,
-      score,
-      method,
-      reason,
-    }),
-  });
+  debugLog('saveCombination', 'Starting saveCombination', { whiteBalls, powerball, method });
+  try {
+    const result = await fetchWithLogging('/api/combinations/update', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        white_balls: whiteBalls,
+        powerball,
+        score,
+        method,
+        reason,
+      }),
+    });
+    debugLog('saveCombination', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('saveCombination', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Save user settings
  */
 export async function saveUserSettings(settings: any) {
-  logger.info('Saving user settings');
-  return fetchWithLogging('/api/user_settings', {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify(settings),
-  });
+  debugLog('saveUserSettings', 'Starting saveUserSettings');
+  try {
+    const result = await fetchWithLogging('/api/user_settings', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(settings),
+    });
+    debugLog('saveUserSettings', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('saveUserSettings', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get all draws
  */
 export async function getDraws(limit: number = 1000, offset: number = 0) {
-  logger.info('Getting all draws', { limit, offset });
-  return fetchWithLogging(`/api/draws?limit=${limit}&offset=${offset}`, {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getDraws', 'Starting getDraws', { limit, offset });
+  try {
+    const result = await fetchWithLogging(`/api/draws?limit=${limit}&offset=${offset}`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getDraws', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getDraws', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get latest draw
  */
 export async function getLatestDraw() {
-  logger.info('Getting latest draw');
-  return fetchWithLogging('/api/draws/latest', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getLatestDraw', 'Starting getLatestDraw');
+  try {
+    const result = await fetchWithLogging('/api/draws/latest', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getLatestDraw', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getLatestDraw', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get draw by number
  */
 export async function getDrawByNumber(drawNumber: number) {
-  logger.info('Getting draw by number', { drawNumber });
-  return fetchWithLogging(`/api/draws/${drawNumber}`, {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getDrawByNumber', 'Starting getDrawByNumber', { drawNumber });
+  try {
+    const result = await fetchWithLogging(`/api/draws/${drawNumber}`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getDrawByNumber', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getDrawByNumber', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Update draw winner status
  */
 export async function updateDrawWinner(drawId: string, isWinner: boolean) {
-  logger.info('Updating draw winner status', { drawId, isWinner });
-  return fetchWithLogging(`/api/draws/${drawId}/winner`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify({ is_winner: isWinner }),
-  });
+  debugLog('updateDrawWinner', 'Starting updateDrawWinner', { drawId, isWinner });
+  try {
+    const result = await fetchWithLogging(`/api/draws/${drawId}/winner`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ is_winner: isWinner }),
+    });
+    debugLog('updateDrawWinner', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('updateDrawWinner', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get predictions
  */
 export async function getPredictions(method: string = 'all', limit: number = 10, offset: number = 0) {
-  logger.info('Getting predictions', { method, limit, offset });
-  return fetchWithLogging(`/api/predictions?method=${method}&limit=${limit}&offset=${offset}`, {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getPredictions', 'Starting getPredictions', { method, limit, offset });
+  try {
+    const result = await fetchWithLogging(`/api/predictions?method=${method}&limit=${limit}&offset=${offset}`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getPredictions', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getPredictions', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get user stats
  */
 export async function getUserStats(userId: string = 'anonymous') {
-  logger.info('Getting user stats', { userId });
-  return fetchWithLogging(`/api/user_stats?user_id=${userId}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
+  debugLog('getUserStats', 'Starting getUserStats', { userId });
+  try {
+    const result = await fetchWithLogging(`/api/user_stats?user_id=${userId}`, {
+      method: 'GET',
+      headers: getHeaders(),
+    });
+    debugLog('getUserStats', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getUserStats', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get user checks
  */
 export async function getUserChecks(userId: string = 'anonymous', limit: number = 10, offset: number = 0) {
-  logger.info('Getting user checks', { userId, limit, offset });
-  return fetchWithLogging(`/api/user_checks?user_id=${userId}&limit=${limit}&offset=${offset}`, {
-    method: 'GET',
-    headers: getHeaders(),
-  });
+  debugLog('getUserChecks', 'Starting getUserChecks', { userId, limit, offset });
+  try {
+    const result = await fetchWithLogging(`/api/user_checks?user_id=${userId}&limit=${limit}&offset=${offset}`, {
+      method: 'GET',
+      headers: getHeaders(),
+    });
+    debugLog('getUserChecks', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getUserChecks', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Reset database schema
  */
 export async function resetDatabaseSchema() {
-  logger.info('Resetting database schema');
-  return fetchWithLogging('/api/db/reset', {
-    method: 'POST',
-    headers: getHeaders(),
-  });
+  debugLog('resetDatabaseSchema', 'Starting resetDatabaseSchema');
+  try {
+    const result = await fetchWithLogging('/api/db/reset', {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    debugLog('resetDatabaseSchema', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('resetDatabaseSchema', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get health status
  */
 export async function getHealthStatus() {
-  logger.info('Checking API health');
-  return fetchWithLogging('/api/health', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getHealthStatus', 'Starting getHealthStatus');
+  try {
+    const result = await fetchWithLogging('/api/health', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getHealthStatus', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getHealthStatus', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get ideas (placeholder for feature suggestions)
  */
 export async function getIdeas() {
-  logger.info('Getting ideas');
-  return fetchWithLogging('/api/ideas', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getIdeas', 'Starting getIdeas');
+  try {
+    const result = await fetchWithLogging('/api/ideas', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getIdeas', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getIdeas', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * User login
  */
 export async function login(username: string, password: string) {
-  logger.info('User login attempt', { username });
+  debugLog('login', 'Starting login', { username });
   const formData = new URLSearchParams();
   formData.append('username', username);
   formData.append('password', password);
 
   try {
+    debugLog('login', 'Calling login API...');
     const response = await fetch(`${API_URL}/api/auth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData,
     });
 
+    debugLog('login', 'Response received', {
+      status: response.status,
+      statusText: response.statusText
+    });
+
     if (!response.ok) {
       const errorData = await response.text();
-      logger.error('Login failed', errorData);
+      debugLog('login', 'Login failed', errorData);
       throw new Error(`Login failed: ${errorData}`);
     }
 
     const data = await response.json();
-    logger.info('Login successful', { username, userId: data.user_id });
+    debugLog('login', 'Login successful', { username, userId: data.user_id });
+    
     localStorage.setItem('token', data.access_token);
     localStorage.setItem('user_id', data.user_id.toString());
     localStorage.setItem('username', data.username);
+    
     return data;
   } catch (error) {
-    logger.error('Login error', error);
+    debugLog('login', 'Error', error);
     throw error;
   }
 }
@@ -498,7 +686,7 @@ export async function login(username: string, password: string) {
  * User registration
  */
 export async function register(username: string, password: string, email?: string) {
-  logger.info('User registration attempt', { username, email });
+  debugLog('register', 'Starting registration', { username, email });
   try {
     const response = await fetch(`${API_URL}/api/auth/register`, {
       method: 'POST',
@@ -508,15 +696,15 @@ export async function register(username: string, password: string, email?: strin
 
     if (!response.ok) {
       const errorData = await response.text();
-      logger.error('Registration failed', errorData);
+      debugLog('register', 'Registration failed', errorData);
       throw new Error(`Registration failed: ${errorData}`);
     }
 
     const data = await response.json();
-    logger.info('Registration successful', { username, userId: data.id });
+    debugLog('register', 'Registration successful', { username, userId: data.id });
     return data;
   } catch (error) {
-    logger.error('Registration error', error);
+    debugLog('register', 'Error', error);
     throw error;
   }
 }
@@ -526,7 +714,7 @@ export async function register(username: string, password: string, email?: strin
  */
 export function logout() {
   const username = localStorage.getItem('username');
-  logger.info('User logout', { username });
+  debugLog('logout', 'Logging out user', { username });
   localStorage.removeItem('token');
   localStorage.removeItem('user_id');
   localStorage.removeItem('username');
@@ -538,7 +726,7 @@ export function logout() {
  */
 export function isAuthenticated(): boolean {
   const hasToken = !!getAuthToken();
-  logger.debug('Authentication check', { isAuthenticated: hasToken });
+  debugLog('isAuthenticated', 'Authentication check', { isAuthenticated: hasToken });
   return hasToken;
 }
 
@@ -549,10 +737,10 @@ export function getCurrentUser() {
   const userId = localStorage.getItem('user_id');
   const username = localStorage.getItem('username');
   if (!userId || !username) {
-    logger.debug('Get current user: No user logged in');
+    debugLog('getCurrentUser', 'No user logged in');
     return null;
   }
-  logger.debug('Get current user', { userId, username });
+  debugLog('getCurrentUser', 'Current user', { userId, username });
   return { id: parseInt(userId), username };
 }
 
@@ -560,42 +748,117 @@ export function getCurrentUser() {
  * Get current user info from server
  */
 export async function getCurrentUserServer() {
-  logger.info('Getting current user from server');
-  return fetchWithLogging('/api/auth/me', {
-    method: 'GET',
-    headers: getHeaders(),
-  });
+  debugLog('getCurrentUserServer', 'Starting getCurrentUserServer');
+  try {
+    const result = await fetchWithLogging('/api/auth/me', {
+      method: 'GET',
+      headers: getHeaders(),
+    });
+    debugLog('getCurrentUserServer', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getCurrentUserServer', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get all insights summary
  */
 export async function getAllInsights() {
-  logger.info('Getting all insights');
-  return fetchWithLogging('/api/insights/all', {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getAllInsights', 'Starting getAllInsights');
+  try {
+    const result = await fetchWithLogging('/api/insights/all', {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getAllInsights', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getAllInsights', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Run analytics tasks
  */
 export async function runAnalytics() {
-  logger.info('Running analytics tasks');
-  return fetchWithLogging('/api/analytics/run', {
-    method: 'POST',
-    headers: getHeaders(),
-  });
+  debugLog('runAnalytics', 'Starting runAnalytics');
+  try {
+    const result = await fetchWithLogging('/api/analytics/run', {
+      method: 'POST',
+      headers: getHeaders(),
+    });
+    debugLog('runAnalytics', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('runAnalytics', 'Error', error);
+    throw error;
+  }
 }
 
 /**
  * Get top combinations
  */
 export async function getTopCombinations(limit: number = 10) {
-  logger.info('Getting top combinations', { limit });
-  return fetchWithLogging(`/api/combinations?limit=${limit}`, {
-    method: 'GET',
-    headers: getHeaders(false),
-  });
+  debugLog('getTopCombinations', 'Starting getTopCombinations', { limit });
+  try {
+    const result = await fetchWithLogging(`/api/combinations?limit=${limit}`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    debugLog('getTopCombinations', 'Success', result);
+    return result;
+  } catch (error) {
+    debugLog('getTopCombinations', 'Error', error);
+    throw error;
+  }
 }
+
+// Add a test function to help debug
+export async function testApiConnection() {
+  debugLog('testApiConnection', 'Starting API connection test');
+  
+  console.group('API Connection Test');
+  
+  // Test 1: Direct fetch to health endpoint
+  console.log('Test 1: Direct fetch to /api/health');
+  try {
+    const response = await fetch('/api/health');
+    console.log('Health check response:', {
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url
+    });
+    const data = await response.json();
+    console.log('Health check data:', data);
+  } catch (error) {
+    console.error('Health check failed:', error);
+  }
+  
+  // Test 2: API function call
+  console.log('Test 2: API function call to getDraws');
+  try {
+    const draws = await getDraws(1, 0);
+    console.log('Draws response:', draws);
+  } catch (error) {
+    console.error('getDraws failed:', error);
+  }
+  
+  console.groupEnd();
+}
+
+// Export a debug function to check API status
+export function debugApiStatus() {
+  console.group('API Debug Status');
+  console.log('API_URL:', API_URL);
+  console.log('Current token:', getAuthToken() ? 'Token exists' : 'No token');
+  console.log('Current user:', getCurrentUser());
+  console.log('Headers:', getHeaders());
+  console.groupEnd();
+}
+
+// Log when the module is loaded
+debugLog('Module', 'API module loaded');
+debugApiStatus();

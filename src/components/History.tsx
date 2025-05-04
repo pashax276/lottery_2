@@ -1,64 +1,11 @@
 // src/components/History.tsx
 import React, { useState, useEffect } from 'react';
-import { Calendar, Search, Filter, Trophy, X } from 'lucide-react';
+import { Calendar, Search, Filter, Trophy, X, AlertCircle } from 'lucide-react';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
-
-// API helper (unchanged)
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
-const getDraws = async (limit: number, offset: number) => {
-  try {
-    const url = `${API_URL}/api/draws?limit=${limit}&offset=${offset}`;
-    console.log('Fetching draws from:', url);
-    const response = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } catch (err) {
-    console.error('getDraws error:', err);
-    throw err;
-  }
-};
-
-// Utility functions (unchanged)
-const safelyParseNumber = (value: any, defaultValue: number): number => {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const parsed = parseInt(value, 10);
-    return isNaN(parsed) ? defaultValue : parsed;
-  }
-  return defaultValue;
-};
-
-const isValidArray = (arr: any): boolean =>
-  Array.isArray(arr) && arr.every(item => typeof item === 'number');
-
-const processWhiteBalls = (whiteBalls: any): number[] => {
-  try {
-    if (isValidArray(whiteBalls)) {
-      return whiteBalls.slice(0, 5);
-    }
-    if (typeof whiteBalls === 'string') {
-      const cleaned = whiteBalls.replace(/[{}]/g, '');
-      const nums = cleaned
-        .split(',')
-        .map(n => parseInt(n.trim(), 10))
-        .filter(n => !isNaN(n));
-      if (nums.length === 5) return nums;
-    }
-    console.warn('Invalid white_balls format:', whiteBalls);
-    return [1, 2, 3, 4, 5];
-  } catch {
-    return [1, 2, 3, 4, 5];
-  }
-};
-
-const processPowerball = (powerball: any): number => {
-  const p = safelyParseNumber(powerball, 1);
-  return p >= 1 && p <= 26 ? p : 1;
-};
+import { getDraws } from '../lib/api';
+import { processWhiteBalls, processPowerball, safelyParseNumber, formatCurrency } from '../utils/dataUtils';
 
 interface Draw {
   id: string;
@@ -78,13 +25,8 @@ const History: React.FC = () => {
   const [dateFilter, setDateFilter] = useState('');
   const [page, setPage] = useState(1);
   const [totalDraws, setTotalDraws] = useState(0);
-  const [selectedDraw, setSelectedDraw] = useState<string | null>(null);
-  const [isMarkingWinner, setIsMarkingWinner] = useState(false);
-
-  // How many rows per page in the table
   const itemsPerPage = 20;
 
-  // On mount, fetch *all* draws (up to 1000)
   useEffect(() => {
     fetchDraws();
   }, []);
@@ -92,65 +34,45 @@ const History: React.FC = () => {
   const fetchDraws = async () => {
     setLoading(true);
     setError(null);
+    
     try {
-      // **Fetch all** instead of paginating server-side
       const response = await getDraws(1000, 0);
+      
       if (!response || !response.draws) {
-        throw new Error('No draws returned');
+        throw new Error('No draws data returned');
       }
 
-      const processed: Draw[] = response.draws.map((d: any) => ({
-        id: d.id.toString(),
-        draw_number: safelyParseNumber(d.draw_number, 1),
-        draw_date: d.draw_date || 'Unknown',
-        white_balls: processWhiteBalls(d.white_balls),
-        powerball: processPowerball(d.powerball),
-        jackpot_amount: safelyParseNumber(d.jackpot_amount, 0),
-        winners: safelyParseNumber(d.winners, 0),
+      // Process the draws to ensure proper data format
+      const processedDraws: Draw[] = response.draws.map((draw: any) => ({
+        id: draw.id?.toString() || '',
+        draw_number: safelyParseNumber(draw.draw_number, 0),
+        draw_date: draw.draw_date || 'Unknown',
+        white_balls: processWhiteBalls(draw.white_balls),
+        powerball: processPowerball(draw.powerball),
+        jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
+        winners: safelyParseNumber(draw.winners, 0),
       }));
 
-      setDraws(processed);
-      setTotalDraws(processed.length);
+      setDraws(processedDraws);
+      setTotalDraws(processedDraws.length);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error fetching draws';
-      console.error('fetchDraws:', err);
-      setError(msg);
-      showToast.error(msg);
+      const errorMessage = err instanceof Error ? err.message : 'Error fetching draws';
+      setError(errorMessage);
+      showToast.error(errorMessage);
+      console.error('Error fetching draws:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Mark winner / no-winner (unchanged)
-  const handleMarkWinner = async (id: string, num: number, isWinner: boolean) => {
-    setIsMarkingWinner(true);
-    setSelectedDraw(id);
-    try {
-      // TODO: call real API
-      await new Promise(r => setTimeout(r, 500));
-      setDraws(ds =>
-        ds.map(d => (d.id === id ? { ...d, winners: isWinner ? 1 : 0 } : d))
-      );
-      showToast.success(
-        isWinner ? `Draw #${num} marked winner` : `Draw #${num} marked no winner`
-      );
-    } catch {
-      showToast.error('Failed to update winner status');
-    } finally {
-      setIsMarkingWinner(false);
-      setSelectedDraw(null);
-    }
-  };
-
   // Apply filters
-  const filtered = draws.filter(d => {
-    const matchesSearch =
-      !searchTerm ||
-      d.draw_number.toString().includes(searchTerm) ||
-      d.white_balls.some(b => b.toString().includes(searchTerm)) ||
-      d.powerball.toString().includes(searchTerm);
+  const filtered = draws.filter(draw => {
+    const matchesSearch = !searchTerm ||
+      draw.draw_number.toString().includes(searchTerm) ||
+      draw.white_balls.some(ball => ball.toString().includes(searchTerm)) ||
+      draw.powerball.toString().includes(searchTerm);
 
-    const matchesDate = !dateFilter || d.draw_date.includes(dateFilter);
+    const matchesDate = !dateFilter || draw.draw_date.includes(dateFilter);
     return matchesSearch && matchesDate;
   });
 
@@ -160,15 +82,17 @@ const History: React.FC = () => {
   const endIndex = startIndex + itemsPerPage;
   const pageItems = filtered.slice(startIndex, endIndex);
 
-  // Handlers for filter inputs
+  // Handlers
   const onSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
     setPage(1);
   };
+
   const onDate = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDateFilter(e.target.value);
     setPage(1);
   };
+
   const clearFilters = () => {
     setSearchTerm('');
     setDateFilter('');
@@ -182,14 +106,18 @@ const History: React.FC = () => {
       </div>
     );
   }
+
   if (error) {
     return (
       <div className="bg-red-50 p-6 rounded-lg shadow-sm">
-        <h2 className="text-red-800 text-lg font-medium mb-2">Error</h2>
-        <p className="text-red-600">{error}</p>
+        <div className="flex items-center space-x-3 mb-4">
+          <AlertCircle className="h-6 w-6 text-red-600" />
+          <h2 className="text-red-800 text-lg font-medium">Error</h2>
+        </div>
+        <p className="text-red-600 mb-4">{error}</p>
         <button
           onClick={fetchDraws}
-          className="mt-4 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
         >
           Retry
         </button>
@@ -237,52 +165,58 @@ const History: React.FC = () => {
           </div>
         </div>
 
-        {/* No results */}
+        {/* Table */}
         {filtered.length === 0 ? (
           <div className="text-center py-12">
             <Filter className="h-12 w-12 text-gray-300 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-500">No draws found</h3>
-            <p className="text-gray-400 mt-1">Try different filters.</p>
+            <p className="text-gray-400 mt-1">Try adjusting your filters</p>
           </div>
         ) : (
           <>
-            {/* Table */}
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead>
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Numbers</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Jackpot</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Winner?</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Draw #
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Numbers
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Jackpot
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Winner
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {pageItems.map(d => (
-                    <tr key={d.id} className="hover:bg-gray-50">
+                  {pageItems.map((draw) => (
+                    <tr key={draw.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {d.draw_number}
+                        {draw.draw_number}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {d.draw_date}
+                        {draw.draw_date}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="flex items-center space-x-2">
-                          {d.white_balls.map((n, i) => (
-                            <NumberBall key={i} number={n} size={30} />
+                          {draw.white_balls.map((number, idx) => (
+                            <NumberBall key={idx} number={number} size={30} />
                           ))}
-                          <NumberBall number={d.powerball} isPowerball size={30} />
+                          <NumberBall number={draw.powerball} isPowerball size={30} />
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {d.jackpot_amount
-                          ? `$${d.jackpot_amount.toLocaleString()}`
-                          : 'N/A'}
+                        {formatCurrency(draw.jackpot_amount)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {d.winners > 0 ? (
+                        {draw.winners > 0 ? (
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                             <Trophy className="h-3 w-3 mr-1" />Yes
                           </span>
@@ -290,36 +224,6 @@ const History: React.FC = () => {
                           <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
                             <X className="h-3 w-3 mr-1" />No
                           </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isMarkingWinner && selectedDraw === d.id ? (
-                          <LoadingSpinner size={20} />
-                        ) : (
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => handleMarkWinner(d.id, d.draw_number, true)}
-                              disabled={d.winners > 0}
-                              className={`inline-flex items-center px-2 py-1 text-xs rounded ${
-                                d.winners > 0
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-green-100'
-                              }`}
-                            >
-                              <Trophy className="h-3 w-3 mr-1" />Winner
-                            </button>
-                            <button
-                              onClick={() => handleMarkWinner(d.id, d.draw_number, false)}
-                              disabled={d.winners === 0}
-                              className={`inline-flex items-center px-2 py-1 text-xs rounded ${
-                                d.winners === 0
-                                  ? 'bg-gray-200 text-gray-700'
-                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                            >
-                              <X className="h-3 w-3 mr-1" />No Winner
-                            </button>
-                          </div>
                         )}
                       </td>
                     </tr>
@@ -331,8 +235,7 @@ const History: React.FC = () => {
             {/* Pagination */}
             <div className="mt-6 flex items-center justify-between">
               <div className="text-sm text-gray-500">
-                Showing {startIndex + 1}–{Math.min(endIndex, filtered.length)} of{' '}
-                {filtered.length}
+                Showing {startIndex + 1}–{Math.min(endIndex, filtered.length)} of {filtered.length}
               </div>
               <div className="flex items-center space-x-4">
                 <button

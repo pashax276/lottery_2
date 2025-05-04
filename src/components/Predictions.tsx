@@ -1,126 +1,102 @@
-import React from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Brain, Sparkles, TrendingUp, RefreshCw, Filter, AlertCircle } from 'lucide-react';
-import { format } from 'date-fns';
+// src/components/Predictions.tsx
+import React, { useState, useEffect } from 'react';
+import { Brain, Sparkles, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
-import useLocalStorage from '../hooks/useLocalStorage';
+import { getPredictions } from '../lib/api';
+import { processWhiteBalls, processPowerball } from '../utils/dataUtils';
 
 interface Prediction {
   white_balls: number[];
   powerball: number;
   confidence: number;
   method: string;
-  timestamp: string;
+  timestamp?: string;
   reason?: string;
 }
 
-const predictionMethods = [
-  { id: 'all', label: 'All Methods' },
-  { id: 'frequency', label: 'Frequency Analysis' },
-  { id: 'pattern', label: 'Pattern Recognition' },
-  { id: 'historical', label: 'Historical Trends' },
-  { id: 'machine-learning', label: 'Machine Learning' },
-];
-
-// Updated API URL handling with better error messaging
-const API_URL = import.meta.env.VITE_API_URL;
-if (!API_URL) {
-  console.error('VITE_API_URL is not defined in environment variables');
-}
-
 function Predictions() {
-  const [selectedMethod, setSelectedMethod] = useLocalStorage('selectedPredictionMethod', 'all');
-  const [sortOrder, setSortOrder] = useLocalStorage('predictionSortOrder', 'confidence');
+  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const { data: predictions = [], isLoading, error, refetch } = useQuery<Prediction[]>({
-    queryKey: ['predictions', selectedMethod],
-    queryFn: async () => {
-      try {
-        if (!API_URL) {
-          throw new Error('Backend API URL is not configured. Please check your .env file.');
-        }
+  useEffect(() => {
+    fetchPredictions();
+  }, []);
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-
-        const response = await fetch(`${API_URL}/api/predictions?method=${selectedMethod}`, {
-          signal: controller.signal,
-          headers: {
-            'Accept': 'application/json',
-          }
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          const errorData = await response.text();
-          throw new Error(`Server error (${response.status}): ${errorData}`);
-        }
-
-        const data = await response.json();
-        return data;
-      } catch (err) {
-        if (err instanceof Error) {
-          if (err.name === 'AbortError') {
-            throw new Error('Request timed out. Please check if the backend server is running on port 5001.');
-          }
-          if (err.message.includes('Failed to fetch')) {
-            throw new Error('Could not connect to the backend server. Please ensure it is running on port 5001 and accessible.');
-          }
-          throw err;
-        }
-        throw new Error('Failed to fetch predictions');
+  const fetchPredictions = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await getPredictions();
+      
+      // Handle different response formats
+      let predictionsData: Prediction[] = [];
+      
+      if (Array.isArray(response)) {
+        predictionsData = response;
+      } else if (response && response.predictions) {
+        predictionsData = response.predictions;
+      } else if (response && response.data) {
+        predictionsData = response.data;
+      } else {
+        console.log('Unexpected response format:', response);
+        predictionsData = [];
       }
-    },
-    retry: 1,
-    retryDelay: 1000,
-  });
+      
+      // Process predictions to ensure proper data format
+      const processedPredictions = predictionsData.map((pred: any) => ({
+        white_balls: processWhiteBalls(pred.white_balls),
+        powerball: processPowerball(pred.powerball),
+        confidence: pred.confidence || 0,
+        method: pred.method || 'unknown',
+        timestamp: pred.timestamp || new Date().toISOString(),
+        reason: pred.reason || pred.rationale
+      }));
+      
+      setPredictions(processedPredictions);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch predictions';
+      setError(errorMessage);
+      console.error('Error fetching predictions:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleRefresh = async () => {
     showToast.loading('Refreshing predictions...');
-    try {
-      await refetch();
-      showToast.success('Predictions updated!');
-    } catch (err) {
-      showToast.error(err instanceof Error ? err.message : 'Failed to refresh predictions');
-    }
+    await fetchPredictions();
+    showToast.success('Predictions updated!');
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <LoadingSpinner size={50} />
+      </div>
+    );
+  }
 
   if (error) {
     return (
       <div className="bg-red-50 p-6 rounded-lg shadow-sm">
         <div className="flex items-center space-x-3 mb-4">
           <AlertCircle className="h-6 w-6 text-red-600" />
-          <h3 className="text-lg font-medium text-red-900">Connection Error</h3>
+          <h3 className="text-lg font-medium text-red-900">Error Loading Predictions</h3>
         </div>
-        <p className="text-red-600 mb-4">{error instanceof Error ? error.message : 'Unknown error'}</p>
-        <div className="bg-white p-4 rounded-md text-sm text-gray-600 mb-4">
-          <p className="font-medium mb-2">Troubleshooting steps:</p>
-          <ol className="list-decimal list-inside space-y-1">
-            <li>Verify that the backend server is running (python backend/main.py)</li>
-            <li>Check if the server is running on port 5001</li>
-            <li>Ensure there are no firewall restrictions blocking the connection</li>
-            <li>Verify that the VITE_API_URL is set correctly in the .env file</li>
-          </ol>
-        </div>
+        <p className="text-red-600 mb-4">{error}</p>
         <button
-          onClick={() => refetch()}
-          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+          onClick={fetchPredictions}
+          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
         >
           Try Again
         </button>
       </div>
     );
   }
-
-  const sortedPredictions = [...predictions].sort((a, b) => {
-    if (sortOrder === 'confidence') {
-      return b.confidence - a.confidence;
-    }
-    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
-  });
 
   return (
     <div className="space-y-6">
@@ -129,68 +105,29 @@ function Predictions() {
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-3">
             <Brain className="h-8 w-8 text-blue-600" />
-            <h2 className="text-2xl font-bold text-gray-900">Top Predictions</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Predictions</h2>
           </div>
           <button
             onClick={handleRefresh}
             className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            disabled={isLoading}
+            disabled={loading}
           >
-            <RefreshCw className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </button>
-        </div>
-
-        {/* Filters */}
-        <div className="flex flex-wrap gap-4 mb-6">
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              <Filter className="h-4 w-4 inline-block mr-1" />
-              Prediction Method
-            </label>
-            <select
-              value={selectedMethod}
-              onChange={(e) => setSelectedMethod(e.target.value)}
-              className="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-            >
-              {predictionMethods.map((method) => (
-                <option key={method.id} value={method.id}>
-                  {method.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              <TrendingUp className="h-4 w-4 inline-block mr-1" />
-              Sort By
-            </label>
-            <select
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value)}
-              className="w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
-            >
-              <option value="confidence">Confidence (High to Low)</option>
-              <option value="timestamp">Latest First</option>
-            </select>
-          </div>
         </div>
       </div>
 
       {/* Predictions Grid */}
-      {isLoading ? (
-        <div className="flex justify-center items-center h-64">
-          <LoadingSpinner size={60} />
-        </div>
-      ) : sortedPredictions.length === 0 ? (
+      {predictions.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm p-8 text-center">
           <Brain className="h-12 w-12 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No predictions available</h3>
-          <p className="text-gray-500">Try changing the filters or refreshing the predictions.</p>
+          <p className="text-gray-500">Try refreshing to get the latest predictions.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {sortedPredictions.map((prediction, index) => (
+          {predictions.map((prediction, index) => (
             <div
               key={index}
               className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow"
@@ -227,10 +164,6 @@ function Predictions() {
               {prediction.reason && (
                 <p className="text-sm text-gray-600 mt-2">{prediction.reason}</p>
               )}
-
-              <div className="text-xs text-gray-500 mt-4">
-                Generated: {format(new Date(prediction.timestamp), 'MMM d, yyyy HH:mm')}
-              </div>
             </div>
           ))}
         </div>

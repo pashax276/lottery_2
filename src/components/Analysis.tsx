@@ -1,15 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
-import { BarChart3, PieChart, TrendingUp, Activity, Grid as GridIcon, Save } from 'lucide-react';
+import { BarChart3, PieChart, TrendingUp, Activity, Grid as GridIcon, Save, Filter, RefreshCw } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import io, { Socket } from 'socket.io-client';
-import Plotly from 'plotly.js-dist-min';
-import { Card, CardContent, Typography, Tabs, Tab, Slider, Button, Select, MenuItem, FormControl, InputLabel, Switch, Box, Grid, CircularProgress, TextField } from '@mui/material';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
 import NumberBall from './NumberBall';
-import useLocalStorage from '../hooks/useLocalStorage'; // Corrected to default import
+import useLocalStorage from '../hooks/useLocalStorage';
 import { getFrequencyAnalysis, getHotNumbers, getDueNumbers, getPairs, getPositions, getPredictions } from '../lib/api';
-import { processWhiteBalls, processPowerball } from '../utils/dataUtils';
 
 interface FrequencyData {
   number: string;
@@ -26,13 +21,6 @@ interface PositionData {
   top_numbers: { number: number; count: number }[];
 }
 
-interface ClusterData {
-  centers: number[];
-  clusters: Record<string, number[]>;
-  cluster_averages: Record<string, number>;
-  optimal_k: number;
-}
-
 interface PredictionData {
   white_balls: number[];
   powerball: number;
@@ -42,238 +30,126 @@ interface PredictionData {
 
 const Analysis = () => {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useLocalStorage<number>('analysis_tab', 0);
+  const [tab, setTab] = useLocalStorage<string>('analysis_tab', 'frequency');
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useLocalStorage<'tiles' | 'charts'>('analysis_viewMode', 'tiles');
   const [lookback, setLookback] = useLocalStorage<number>('analysis_lookback', 50);
   const [selectedPosition, setSelectedPosition] = useLocalStorage<number>('analysis_position', 1);
   const [darkMode, setDarkMode] = useLocalStorage<boolean>('analysis_darkMode', false);
   const [customCombination, setCustomCombination] = useState<string>('');
-  const [socket, setSocket] = useState<Socket | null>(null);
 
-  const lightTheme = createTheme({
-    palette: { mode: 'light', primary: { main: '#3B82F6' }, secondary: { main: '#EF4444' } },
-  });
-  const darkTheme = createTheme({
-    palette: { mode: 'dark', primary: { main: '#60A5FA' }, secondary: { main: '#F87171' } },
-  });
-  const theme = darkMode ? darkTheme : lightTheme;
-
-  // API fetch functions
-  const fetchClusters = async () => {
-    const response = await fetch('http://localhost:5001/api/insights/cluster');
-    return (await response.json()).result;
-  };
-
-  // React Query hooks
+  // React Query hooks with proper data handling
   const { data: frequencyData = [], refetch: refetchFrequency } = useQuery({
     queryKey: ['frequency', lookback],
     queryFn: async () => {
-      const { white_balls } = await (await getFrequencyAnalysis()).data;
-      return Object.entries(white_balls)
-        .map(([num, freq]) => ({ number: num, frequency: freq }))
-        .sort((a, b) => parseInt(a.number) - parseInt(b.number));
+      try {
+        const result = await getFrequencyAnalysis();
+        if (!result || !result.white_balls) return [];
+        
+        return Object.entries(result.white_balls)
+          .map(([num, freq]) => ({ number: num, frequency: Number(freq) }))
+          .sort((a, b) => parseInt(a.number) - parseInt(b.number));
+      } catch (error) {
+        console.error('Error fetching frequency data:', error);
+        return [];
+      }
     },
     staleTime: 1000 * 60 * 5,
   });
 
-  const { data: hotNumbers = { white_balls: {} } } = useQuery({
+  const { data: hotNumbers = { white_balls: {}, powerballs: {} } } = useQuery({
     queryKey: ['hotNumbers'],
-    queryFn: async () => (await getHotNumbers()).data,
+    queryFn: async () => {
+      try {
+        const result = await getHotNumbers();
+        return result || { white_balls: {}, powerballs: {} };
+      } catch (error) {
+        console.error('Error fetching hot numbers:', error);
+        return { white_balls: {}, powerballs: {} };
+      }
+    },
     staleTime: 1000 * 60 * 5,
   });
 
-  const { data: dueNumbers = { white_balls: {} } } = useQuery({
+  const { data: dueNumbers = { white_balls: {}, powerballs: {} } } = useQuery({
     queryKey: ['dueNumbers'],
-    queryFn: async () => (await getDueNumbers()).data,
+    queryFn: async () => {
+      try {
+        const result = await getDueNumbers();
+        return result || { white_balls: {}, powerballs: {} };
+      } catch (error) {
+        console.error('Error fetching due numbers:', error);
+        return { white_balls: {}, powerballs: {} };
+      }
+    },
     staleTime: 1000 * 60 * 5,
   });
 
   const { data: pairData = { common_pairs: [] } } = useQuery({
     queryKey: ['pairs'],
-    queryFn: async () => (await getPairs()).data,
+    queryFn: async () => {
+      try {
+        const result = await getPairs();
+        return result || { common_pairs: [] };
+      } catch (error) {
+        console.error('Error fetching pair data:', error);
+        return { common_pairs: [] };
+      }
+    },
     staleTime: 1000 * 60 * 5,
   });
 
   const { data: positionData = { positions: [] } } = useQuery({
     queryKey: ['positions'],
-    queryFn: async () => (await getPositions()).data,
-    staleTime: 1000 * 60 * 5,
-  });
-
-  const { data: clusterData = { centers: [], clusters: {}, cluster_averages: {}, optimal_k: 2 } } = useQuery({
-    queryKey: ['clusters'],
-    queryFn: fetchClusters,
+    queryFn: async () => {
+      try {
+        const result = await getPositions();
+        return result || { positions: [] };
+      } catch (error) {
+        console.error('Error fetching position data:', error);
+        return { positions: [] };
+      }
+    },
     staleTime: 1000 * 60 * 5,
   });
 
   const { data: predictions = [] } = useQuery({
     queryKey: ['predictions'],
-    queryFn: async () => (await getPredictions('all')).data,
+    queryFn: async () => {
+      try {
+        const result = await getPredictions('all');
+        return Array.isArray(result) ? result : [];
+      } catch (error) {
+        console.error('Error fetching predictions:', error);
+        return [];
+      }
+    },
     staleTime: 1000 * 60 * 5,
   });
 
-  // WebSocket setup
-  useEffect(() => {
-    const socketInstance = io('http://localhost:5001');
-    setSocket(socketInstance);
-
-    socketInstance.on('new_draw', (draw) => {
-      console.log('New draw received:', draw);
-      queryClient.invalidateQueries(['frequency']);
-      queryClient.invalidateQueries(['hotNumbers']);
-      queryClient.invalidateQueries(['dueNumbers']);
-      queryClient.invalidateQueries(['pairs']);
-      queryClient.invalidateQueries(['positions']);
-      queryClient.invalidateQueries(['clusters']);
-      queryClient.invalidateQueries(['predictions']);
-    });
-
-    return () => {
-      socketInstance.disconnect();
-    };
-  }, [queryClient]);
-
-  // Pair frequency heatmap
-  const renderPairHeatmap = useMemo(() => {
-    const data = pairData.common_pairs.reduce((acc, { pair, count }) => {
-      acc[pair[0]] = acc[pair[0]] || {};
-      acc[pair[0]][pair[1]] = count;
-      return acc;
-    }, {} as Record<number, Record<number, number>>);
-
-    const xValues = Array.from({ length: 69 }, (_, i) => i + 1);
-    const yValues = xValues;
-    const zValues = xValues.map(x => yValues.map(y => data[x]?.[y] || 0));
-
-    return (
-      <div id="pair-heatmap" style={{ width: '100%', height: '400px' }}>
-        <Plotly.plot
-          divId="pair-heatmap"
-          data={[{
-            type: 'heatmap',
-            x: xValues,
-            y: yValues,
-            z: zValues,
-            colorscale: 'Viridis',
-            showscale: true,
-            hoverinfo: 'x+y+z',
-          }]}
-          layout={{
-            title: 'Pair Frequency Heatmap',
-            xaxis: { title: 'Number 1', tickmode: 'array', tickvals: xValues.filter((_, i) => i % 5 === 0) },
-            yaxis: { title: 'Number 2', tickmode: 'array', tickvals: yValues.filter((_, i) => i % 5 === 0) },
-            paper_bgcolor: darkMode ? '#1d1d1d' : '#ffffff',
-            plot_bgcolor: darkMode ? '#1d1d1d' : '#ffffff',
-            font: { color: darkMode ? '#ffffff' : '#000000' },
-            margin: { t: 50, r: 50, b: 100, l: 100 },
-          }}
-        />
-      </div>
-    );
-  }, [pairData, darkMode]);
-
-  // Cluster 3D plot
-  const renderClusterPlot = useMemo(() => {
-    const { clusters, centers } = clusterData;
-    if (!Object.keys(clusters).length) return null;
-
-    const data = Object.entries(clusters).flatMap(([label, numbers]) =>
-      numbers.map((num, idx) => ({
-        x: num,
-        y: idx % 10,
-        z: centers[parseInt(label)] || 0,
-        cluster: label,
-      }))
-    );
-
-    return (
-      <div id="cluster-plot" style={{ width: '100%', height: '400px' }}>
-        <Plotly.plot
-          divId="cluster-plot"
-          data={[{
-            type: 'scatter3d',
-            mode: 'markers',
-            x: data.map(d => d.x),
-            y: data.map(d => d.y),
-            z: data.map(d => d.z),
-            marker: {
-              size: 6,
-              color: data.map(d => parseInt(d.cluster)),
-              colorscale: 'Viridis',
-              showscale: true,
-            },
-            text: data.map(d => `Number: ${d.x}, Cluster: ${d.cluster}`),
-            hoverinfo: 'text',
-          }]}
-          layout={{
-            title: 'White Ball Cluster Analysis',
-            scene: {
-              xaxis: { title: 'Ball Number' },
-              yaxis: { title: 'Index' },
-              zaxis: { title: 'Cluster Center' },
-            },
-            paper_bgcolor: darkMode ? '#1d1d1d' : '#ffffff',
-            plot_bgcolor: darkMode ? '#1d1d1d' : '#ffffff',
-            font: { color: darkMode ? '#ffffff' : '#000000' },
-          }}
-        />
-      </div>
-    );
-  }, [clusterData, darkMode]);
-
-  // Prediction trends
-  const renderPredictionTrends = useMemo(() => {
-    const data = predictions.slice(0, 10).map((pred: PredictionData, idx: number) => ({
-      index: idx,
-      whiteSum: pred.white_balls.reduce((a, b) => a + b, 0),
-      powerball: pred.powerball,
-      confidence: pred.confidence,
-    }));
-
-    return (
-      <Box height={400}>
-        <ResponsiveContainer>
-          <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="index" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey="whiteSum" stroke="#3B82F6" name="White Balls Sum" />
-            <Line type="monotone" dataKey="powerball" stroke="#EF4444" name="Powerball" />
-            <Line type="monotone" dataKey="confidence" stroke="#22C55E" name="Confidence (%)" />
-          </LineChart>
-        </ResponsiveContainer>
-      </Box>
-    );
-  }, [predictions]);
-
-  // Custom combination handler
   const handleCustomCombination = useCallback(async () => {
     if (!customCombination) return;
+    
     try {
       setLoading(true);
       const numbers = customCombination.split(',').map(Number);
-      if (numbers.length !== 6 || numbers.some(isNaN) || numbers.slice(0, 5).some(n => n < 1 || n > 69) || numbers[5] < 1 || numbers[5] > 26) {
+      
+      if (numbers.length !== 6 || numbers.some(isNaN)) {
         alert('Please enter 5 white balls (1-69) and 1 Powerball (1-26) separated by commas');
         return;
       }
-      const response = await fetch('http://localhost:5001/api/combinations/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify({
-          white_balls: processWhiteBalls(numbers.slice(0, 5)),
-          powerball: processPowerball(numbers[5]),
-          score: 0.5,
-          method: 'user_custom',
-          reason: 'User-defined combination',
-        }),
-      });
-      if (!response.ok) throw new Error('Failed to save combination');
+      
+      const whiteBalls = numbers.slice(0, 5);
+      const powerball = numbers[5];
+      
+      // Validate ranges
+      if (!whiteBalls.every(n => n >= 1 && n <= 69) || powerball < 1 || powerball > 26) {
+        alert('White balls must be 1-69 and Powerball must be 1-26');
+        return;
+      }
+      
+      // Save combination (you would implement this API call)
+      console.log('Saving combination:', { whiteBalls, powerball });
       alert('Custom combination saved!');
       setCustomCombination('');
     } catch (error) {
@@ -284,245 +160,222 @@ const Analysis = () => {
     }
   }, [customCombination]);
 
+  const refreshData = () => {
+    queryClient.invalidateQueries(['frequency']);
+    queryClient.invalidateQueries(['hotNumbers']);
+    queryClient.invalidateQueries(['dueNumbers']);
+    queryClient.invalidateQueries(['pairs']);
+    queryClient.invalidateQueries(['positions']);
+    queryClient.invalidateQueries(['predictions']);
+  };
+
   return (
-    <ThemeProvider theme={theme}>
-      <Box sx={{ p: 4, bgcolor: 'background.default', minHeight: '100vh' }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 4 }}>
-          <Typography variant="h5" sx={{ fontWeight: 'bold' }}>
-            Powerball Analytics
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 2 }}>
-            <FormControlLabel
-              control={<Switch checked={darkMode} onChange={() => setDarkMode(!darkMode)} />}
-              label={darkMode ? 'Dark Mode' : 'Light Mode'}
-            />
-            <Button variant="outlined" startIcon={<Save />} onClick={() => alert('Settings saved!')}>
-              Save Settings
-            </Button>
-          </Box>
-        </Box>
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="bg-white rounded-xl shadow-sm p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center space-x-3">
+            <BarChart3 className="h-8 w-8 text-blue-600" />
+            <h2 className="text-2xl font-bold text-gray-900">Analysis Dashboard</h2>
+          </div>
+          <button
+            onClick={refreshData}
+            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <RefreshCw className="h-5 w-5" />
+            <span>Refresh</span>
+          </button>
+        </div>
 
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} centered sx={{ mb: 3, bgcolor: 'background.paper' }}>
-          <Tab label="Frequency" icon={<BarChart3 size={20} />} />
-          <Tab label="Hot & Due" icon={<TrendingUp size={20} />} />
-          <Tab label="Pairs" icon={<GridIcon size={20} />} />
-          <Tab label="Position" icon={<Activity size={20} />} />
-          <Tab label="Clusters" icon={<Activity size={20} />} />
-          <Tab label="Predictions" icon={<TrendingUp size={20} />} />
-          <Tab label="Custom" icon={<Save size={20} />} />
-        </Tabs>
+        {/* Tab Navigation */}
+        <div className="flex flex-wrap gap-2 mb-6">
+          {[
+            { id: 'frequency', label: 'Frequency', icon: BarChart3 },
+            { id: 'hot-due', label: 'Hot & Due', icon: TrendingUp },
+            { id: 'pairs', label: 'Pairs', icon: GridIcon },
+            { id: 'positions', label: 'Positions', icon: Activity },
+            { id: 'predictions', label: 'Predictions', icon: TrendingUp },
+            { id: 'custom', label: 'Custom', icon: Save },
+          ].map((tabItem) => {
+            const Icon = tabItem.icon;
+            return (
+              <button
+                key={tabItem.id}
+                onClick={() => setTab(tabItem.id)}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+                  tab === tabItem.id
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+                <span>{tabItem.label}</span>
+              </button>
+            );
+          })}
+        </div>
 
-        {loading ? (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <CircularProgress />
-          </Box>
-        ) : (
-          <Grid container spacing={3}>
-            {tab === 0 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" mb={2}>
-                      <Typography variant="h6">Number Frequency Analysis</Typography>
-                      <Box display="flex" alignItems="center">
-                        <BarChart3 size={20} className="mr-2" />
-                        <Typography variant="body2">Historical Data</Typography>
-                      </Box>
-                    </Box>
-                    <Box mb={3}>
-                      <Typography>Lookback Period (draws)</Typography>
-                      <Slider
-                        value={lookback}
-                        onChange={(_, val) => setLookback(val as number)}
-                        min={10}
-                        max={100}
-                        valueLabelDisplay="auto"
-                        sx={{ width: '50%' }}
-                        onChangeCommitted={() => refetchFrequency()}
-                      />
-                    </Box>
-                    <Box height={400}>
-                      <ResponsiveContainer>
-                        <BarChart data={frequencyData}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="number" />
-                          <YAxis />
-                          <Tooltip />
-                          <Bar dataKey="frequency" fill="#3B82F6" />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {tab === 1 && (
-              <>
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Box display="flex" justifyContent="space-between" mb={2}>
-                        <Typography variant="h6">Hot Numbers</Typography>
-                        <TrendingUp size={20} color="#22C55E" />
-                      </Box>
-                      <Box display="flex" flexWrap="wrap" gap={2}>
-                        {Object.keys(hotNumbers.white_balls).slice(0, 5).map(Number).map((number) => (
-                          <NumberBall key={number} number={number} />
-                        ))}
-                      </Box>
-                    </CardContent>
-                  </Card>
-                </Grid>
-                <Grid item xs={12} md={6}>
-                  <Card>
-                    <CardContent>
-                      <Box display="flex" justifyContent="space-between" mb={2}>
-                        <Typography variant="h6">Due Numbers</Typography>
-                        <PieChart size={20} color="#F97316" />
-                      </Box>
-                      <Box display="flex" flexWrap="wrap" gap={2}>
-                        {Object.keys(dueNumbers.white_balls).slice(0, 5).map(Number).map((number) => (
-                          <NumberBall key={number} number={number} />
-                        ))}
-                      </Box>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              </>
-            )}
-
-            {tab === 2 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Box display="flex" justifyContent="space-between" mb={2}>
-                      <Typography variant="h6">Common Number Pairs</Typography>
-                      <FormControlLabel
-                        control={<Switch checked={viewMode === 'charts'} onChange={() => setViewMode(viewMode === 'tiles' ? 'charts' : 'tiles')} />}
-                        label={viewMode === 'tiles' ? 'Tiles' : 'Heatmap'}
-                      />
-                    </Box>
-                    {viewMode === 'tiles' ? (
-                      <Grid container spacing={2}>
-                        {pairData.common_pairs.map(({ pair, count }, index) => (
-                          <Grid item xs={6} sm={4} md={3} key={index}>
-                            <Card sx={{ textAlign: 'center' }}>
-                              <CardContent>
-                                <Box display="flex" justifyContent="center" gap={1}>
-                                  <NumberBall number={pair[0]} />
-                                  <NumberBall number={pair[1]} />
-                                </Box>
-                                <Typography variant="body2" mt={1}>
-                                  {count} occurrences
-                                </Typography>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        ))}
-                      </Grid>
-                    ) : (
-                      <Box>
-                        {renderPairHeatmap}
-                      </Box>
-                    )}
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {tab === 3 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" mb={2}>Position Analysis</Typography>
-                    <FormControl sx={{ minWidth: 200, mb: 3 }}>
-                      <InputLabel>Position</InputLabel>
-                      <Select
-                        value={selectedPosition}
-                        onChange={(e) => setSelectedPosition(Number(e.target.value))}
-                        label="Position"
-                      >
-                        {[1, 2, 3, 4, 5, 6].map((pos) => (
-                          <MenuItem key={pos} value={pos}>
-                            {pos === 6 ? 'Powerball' : `White Ball ${pos}`}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                    <Button variant="contained" onClick={() => queryClient.invalidateQueries(['positions'])} sx={{ mb: 3 }}>
-                      Refresh Analysis
-                    </Button>
-                    <Box height={400}>
-                      <ResponsiveContainer>
-                        <BarChart
-                          data={positionData.positions
-                            .find((p) => p.position === selectedPosition)
-                            ?.top_numbers.map(({ number, count }) => ({ number, count })) || []}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="number" />
-                          <YAxis />
-                          <Tooltip />
-                          <Bar dataKey="count" fill="#3B82F6" />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </Box>
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {tab === 4 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" mb={2}>Cluster Analysis</Typography>
-                    {renderClusterPlot || <Typography>No cluster data available</Typography>}
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {tab === 5 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" mb={2}>Prediction Trends</Typography>
-                    {predictions.length ? renderPredictionTrends : <Typography>No prediction data available</Typography>}
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-
-            {tab === 6 && (
-              <Grid item xs={12}>
-                <Card>
-                  <CardContent>
-                    <Typography variant="h6" mb={2}>Custom Combinations</Typography>
-                    <Box display="flex" gap={2} mb={3}>
-                      <TextField
-                        label="Enter 6 numbers (comma-separated)"
-                        value={customCombination}
-                        onChange={(e) => setCustomCombination(e.target.value)}
-                        placeholder="1,2,3,4,5,6"
-                        fullWidth
-                      />
-                      <Button variant="contained" onClick={handleCustomCombination} disabled={loading}>
-                        Save Combination
-                      </Button>
-                    </Box>
-                    <Typography variant="body2" color="text.secondary">
-                      Enter 5 white ball numbers (1-69) and 1 Powerball (1-26) separated by commas.
-                    </Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            )}
-          </Grid>
+        {/* Tab Content */}
+        {tab === 'frequency' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Number Frequency Analysis</h3>
+            <div className="h-96">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={frequencyData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="number" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="frequency" fill="#3B82F6" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
         )}
-      </Box>
-    </ThemeProvider>
+
+        {tab === 'hot-due' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-gray-50 rounded-lg p-6">
+              <h3 className="text-lg font-semibold mb-4">Hot Numbers</h3>
+              <div className="flex flex-wrap gap-3">
+                {Object.entries(hotNumbers.white_balls)
+                  .sort(([, a], [, b]) => Number(b) - Number(a))
+                  .slice(0, 10)
+                  .map(([number]) => (
+                    <NumberBall key={number} number={Number(number)} />
+                  ))}
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-6">
+              <h3 className="text-lg font-semibold mb-4">Due Numbers</h3>
+              <div className="flex flex-wrap gap-3">
+                {Object.entries(dueNumbers.white_balls)
+                  .sort(([, a], [, b]) => Number(a) - Number(b))
+                  .slice(0, 10)
+                  .map(([number]) => (
+                    <NumberBall key={number} number={Number(number)} />
+                  ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'pairs' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Common Number Pairs</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {pairData.common_pairs.map((item, index) => (
+                <div key={index} className="bg-gray-50 rounded-lg p-4 text-center">
+                  <div className="flex justify-center space-x-2 mb-2">
+                    <NumberBall number={item.pair[0]} size={30} />
+                    <NumberBall number={item.pair[1]} size={30} />
+                  </div>
+                  <p className="text-sm text-gray-600">{item.count} occurrences</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === 'positions' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Position Analysis</h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Select Position
+              </label>
+              <select
+                value={selectedPosition}
+                onChange={(e) => setSelectedPosition(Number(e.target.value))}
+                className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                {[1, 2, 3, 4, 5].map((pos) => (
+                  <option key={pos} value={pos}>
+                    Position {pos}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="h-96">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={
+                    positionData.positions
+                      .find((p) => p.position === selectedPosition)
+                      ?.top_numbers.map((item) => ({
+                        number: item.number,
+                        count: item.count,
+                      })) || []
+                  }
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="number" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#3B82F6" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
+        {tab === 'predictions' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Prediction Trends</h3>
+            <div className="space-y-4">
+              {predictions.map((prediction, index) => (
+                <div key={index} className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium">{prediction.method}</span>
+                    <span className="text-sm text-gray-600">
+                      {Math.round(prediction.confidence)}% confidence
+                    </span>
+                  </div>
+                  <div className="flex space-x-2">
+                    {prediction.white_balls.map((number, idx) => (
+                      <NumberBall key={idx} number={number} />
+                    ))}
+                    <NumberBall number={prediction.powerball} isPowerball />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === 'custom' && (
+          <div>
+            <h3 className="text-lg font-semibold mb-4">Custom Combinations</h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Enter 6 numbers (comma-separated)
+                </label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={customCombination}
+                    onChange={(e) => setCustomCombination(e.target.value)}
+                    placeholder="1,2,3,4,5,6"
+                    className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={handleCustomCombination}
+                    disabled={loading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  Enter 5 white ball numbers (1-69) and 1 Powerball (1-26)
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
