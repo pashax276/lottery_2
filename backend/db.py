@@ -67,14 +67,20 @@ class PostgresDB:
         """
         Execute a SQL statement. If it returns rows, fetch and return them.
         """
-        with self.cursor() as cur:
-            cur.execute(query, params)
-            if cur.description:
-                return cur.fetchall()
+        try:
+            with self.cursor() as cur:
+                cur.execute(query, params)
+                if cur.description:
+                    return cur.fetchall()
+        except Exception as e:
+            logger.error(f"Query execution error: {e}")
+            logger.error(f"Query: {query}")
+            logger.error(f"Params: {params}")
+            raise
         return None
 
     def init_schema(self) -> None:
-        """Create all tables, indexes, and views if they don’t exist."""
+        """Create all tables, indexes, and views if they don't exist."""
         stmts = [
             # 1. USERS
             """
@@ -212,17 +218,93 @@ class PostgresDB:
             except Exception as e:
                 logger.error(f"Schema init error:\n{sql}\n→ {e}")
 
-        # Ensure an anonymous user exists
-        self.execute("""
-            INSERT INTO users (id, username, email)
-            VALUES (1, 'anonymous', 'anonymous@example.com')
-            ON CONFLICT (id) DO NOTHING;
-        """)
-        self.execute("""
-            INSERT INTO user_stats (user_id)
-            VALUES (1)
-            ON CONFLICT (user_id) DO NOTHING;
-        """)
+        # Create users
+        self._ensure_users()
+
+    def _ensure_users(self):
+        """Ensure both anonymous and admin users exist"""
+        try:
+            # First, check if anonymous user exists
+            anon_result = self.execute("SELECT id FROM users WHERE username = 'anonymous'")
+            
+            if not anon_result:
+                # Create anonymous user
+                self.execute("""
+                    INSERT INTO users (username, email)
+                    VALUES ('anonymous', 'anonymous@example.com')
+                    ON CONFLICT (username) DO NOTHING
+                    RETURNING id
+                """)
+                logger.info("Created anonymous user")
+            else:
+                logger.info(f"Anonymous user already exists with ID {anon_result[0]['id']}")
+            
+            # Get the anonymous user ID
+            anon_result = self.execute("SELECT id FROM users WHERE username = 'anonymous'")
+            if anon_result:
+                anon_id = anon_result[0]['id']
+                
+                # Ensure user stats for anonymous user
+                self.execute("""
+                    INSERT INTO user_stats (user_id)
+                    VALUES (%s)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, (anon_id,))
+                logger.info(f"Ensured user stats for anonymous user (ID: {anon_id})")
+            
+            # Now handle admin user
+            admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+            admin_password = os.environ.get("ADMIN_PASSWORD", "powerball_admin")
+            admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
+            
+            # Check if admin exists
+            admin_result = self.execute(
+                "SELECT id, password_hash FROM users WHERE username = %s",
+                (admin_username,)
+            )
+            
+            if not admin_result:
+                # Create admin user
+                logger.info(f"Creating admin user: {admin_username}")
+                hashed_password = pwd_context.hash(admin_password)
+                
+                result = self.execute("""
+                    INSERT INTO users (username, email, password_hash)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (username) DO NOTHING
+                    RETURNING id
+                """, (admin_username, admin_email, hashed_password))
+                
+                if result:
+                    admin_id = result[0]['id']
+                    logger.info(f"Created admin user with ID: {admin_id}")
+                    
+                    # Create user stats for admin
+                    self.execute("""
+                        INSERT INTO user_stats (user_id)
+                        VALUES (%s)
+                        ON CONFLICT (user_id) DO NOTHING
+                    """, (admin_id,))
+                    logger.info("Created user stats for admin")
+            else:
+                admin_id = admin_result[0]['id']
+                password_hash = admin_result[0]['password_hash']
+                
+                if not password_hash:
+                    # Update password if missing
+                    logger.info(f"Admin user exists but has no password, updating...")
+                    hashed_password = pwd_context.hash(admin_password)
+                    self.execute("""
+                        UPDATE users 
+                        SET password_hash = %s 
+                        WHERE id = %s
+                    """, (hashed_password, admin_id))
+                    logger.info(f"Updated admin password")
+                else:
+                    logger.info(f"Admin user '{admin_username}' already exists with ID {admin_id}")
+                
+        except Exception as e:
+            logger.error(f"Error ensuring users: {e}")
 
     # ----------------------------------------
     # CRUD & helpers
@@ -323,12 +405,274 @@ class PostgresDB:
 
     def update_user_stat(self, user_id: int, field: str) -> None:
         # e.g. field = 'draws_added' or 'checks_performed'
-        self.execute(f"""
+        valid_fields = ['draws_added', 'predictions_made', 'analysis_runs', 'checks_performed', 'wins']
+        if field not in valid_fields:
+            logger.error(f"Invalid user stat field: {field}")
+            return
+            
+        query = f"""
             UPDATE user_stats
                SET {field} = {field} + 1,
                    updated_at = NOW()
              WHERE user_id = %s
-        """, (user_id,))
+        """
+        self.execute(query, (user_id,))
+
+    def get_user_stats(self, user_id: int) -> Dict[str, Any]:
+        """Get or create user stats"""
+        rows = self.execute(
+            "SELECT * FROM user_stats WHERE user_id = %s",
+            (user_id,)
+        )
+        
+        if rows:
+            return rows[0]
+        
+        # Create if doesn't exist
+        self.execute(
+            """
+            INSERT INTO user_stats 
+              (user_id, draws_added, predictions_made, analysis_runs, checks_performed, wins)
+            VALUES (%s, 0, 0, 0, 0, 0)
+            ON CONFLICT (user_id) DO NOTHING
+            RETURNING *
+            """,
+            (user_id,)
+        )
+        
+        rows = self.execute(
+            "SELECT * FROM user_stats WHERE user_id = %s",
+            (user_id,)
+        )
+        
+        return rows[0] if rows else {}
+
+    def get_frequency_analysis(self) -> Dict[str, Any]:
+        """Get frequency analysis for all numbers"""
+        result = {
+            'white_balls': {},
+            'powerballs': {}
+        }
+        
+        # Analyze white balls
+        query = """
+        SELECT number, COUNT(*) as frequency
+        FROM numbers
+        WHERE is_powerball = FALSE
+        GROUP BY number
+        ORDER BY number
+        """
+        rows = self.execute(query)
+        
+        if rows:
+            for row in rows:
+                result['white_balls'][str(row['number'])] = row['frequency']
+        
+        # Analyze powerballs
+        query = """
+        SELECT number, COUNT(*) as frequency
+        FROM numbers
+        WHERE is_powerball = TRUE
+        GROUP BY number
+        ORDER BY number
+        """
+        rows = self.execute(query)
+        
+        if rows:
+            for row in rows:
+                result['powerballs'][str(row['number'])] = row['frequency']
+        
+        # Fill missing numbers with zero frequency
+        for i in range(1, 70):
+            if str(i) not in result['white_balls']:
+                result['white_balls'][str(i)] = 0
+        
+        for i in range(1, 27):
+            if str(i) not in result['powerballs']:
+                result['powerballs'][str(i)] = 0
+        
+        return result
+
+    def add_prediction(
+        self,
+        white_balls: List[int],
+        powerball: int,
+        method: str,
+        confidence: float,
+        rationale: str = None,
+        user_id: int = None
+    ) -> Optional[Dict[str, Any]]:
+        """Add a new prediction"""
+        # Insert prediction
+        rows = self.execute(
+            """
+            INSERT INTO predictions (user_id, method, confidence, rationale)
+            VALUES (%s, %s, %s, %s)
+            RETURNING *
+            """,
+            (user_id, method, confidence, rationale)
+        )
+        
+        if not rows:
+            return None
+        
+        prediction = rows[0]
+        
+        # Insert prediction numbers
+        with self.cursor() as cur:
+            # White balls
+            for i, number in enumerate(white_balls, start=1):
+                cur.execute(
+                    """
+                    INSERT INTO prediction_numbers 
+                      (prediction_id, position, number, is_powerball)
+                    VALUES (%s, %s, %s, FALSE)
+                    """,
+                    (prediction['id'], i, number)
+                )
+            
+            # Powerball
+            cur.execute(
+                """
+                INSERT INTO prediction_numbers 
+                  (prediction_id, position, number, is_powerball)
+                VALUES (%s, 6, %s, TRUE)
+                """,
+                (prediction['id'], powerball)
+            )
+        
+        # Update user stats if user_id provided
+        if user_id and user_id > 0:
+            self.update_user_stat(user_id, 'predictions_made')
+        
+        return prediction
+
+    def get_predictions(
+        self,
+        method: Optional[str] = None,
+        user_id: Optional[int] = None,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get predictions, optionally filtered"""
+        where_clauses = []
+        params = []
+        
+        if method:
+            where_clauses.append("p.method = %s")
+            params.append(method)
+        
+        if user_id is not None:
+            where_clauses.append("p.user_id = %s")
+            params.append(user_id)
+        
+        where_clause = ""
+        if where_clauses:
+            where_clause = "WHERE " + " AND ".join(where_clauses)
+        
+        query = f"""
+        SELECT 
+          p.id,
+          p.user_id,
+          p.method,
+          p.confidence,
+          p.rationale,
+          p.created_at,
+          array_agg(CASE WHEN pn.is_powerball = FALSE THEN pn.number END ORDER BY pn.position) FILTER (WHERE pn.is_powerball = FALSE) AS white_balls,
+          (array_agg(pn.number) FILTER (WHERE pn.is_powerball = TRUE))[1] AS powerball
+        FROM predictions p
+        JOIN prediction_numbers pn ON p.id = pn.prediction_id
+        {where_clause}
+        GROUP BY p.id
+        ORDER BY p.created_at DESC
+        LIMIT %s OFFSET %s
+        """
+        
+        params.extend([limit, offset])
+        rows = self.execute(query, tuple(params))
+        
+        return rows or []
+
+    def get_user_checks(self, user_id: int, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """Get user check history"""
+        query = """
+        SELECT 
+          uc.*,
+          d.draw_number,
+          d.draw_date,
+          d.white_balls,
+          d.powerball,
+          d.jackpot_amount
+        FROM user_checks uc
+        JOIN draws d ON uc.draw_id = d.id
+        WHERE uc.user_id = %s
+        ORDER BY uc.created_at DESC
+        LIMIT %s OFFSET %s
+        """
+        
+        rows = self.execute(query, (user_id, limit, offset))
+        return rows or []
+
+    def save_analysis_result(self, analysis_type: str, result_data: Dict[str, Any], parameters: Dict[str, Any] = None) -> None:
+        """Save analysis results"""
+        import json
+        
+        query = """
+        INSERT INTO analysis_results (type, parameters, result_data)
+        VALUES (%s, %s::jsonb, %s::jsonb)
+        """
+        
+        self.execute(
+            query,
+            (
+                analysis_type,
+                json.dumps(parameters) if parameters else None,
+                json.dumps(result_data)
+            )
+        )
+
+    def get_analysis_results(self, analysis_type: str, limit: int = 1) -> List[Dict[str, Any]]:
+        """Get recent analysis results"""
+        query = """
+        SELECT * FROM analysis_results
+        WHERE type = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+        """
+        
+        rows = self.execute(query, (analysis_type, limit))
+        return rows or []
+
+    def get_expected_combinations(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get expected combinations"""
+        query = """
+        SELECT * FROM expected_combinations
+        ORDER BY score DESC, created_at DESC
+        LIMIT %s
+        """
+        
+        rows = self.execute(query, (limit,))
+        return rows or []
+
+    def add_expected_combination(
+        self,
+        white_balls: List[int],
+        powerball: int,
+        score: float,
+        method: str,
+        reason: str = None
+    ) -> None:
+        """Add an expected combination"""
+        query = """
+        INSERT INTO expected_combinations (score, method, reason)
+        VALUES (%s, %s, %s)
+        """
+        
+        self.execute(query, (score, method, reason))
+
+    def clear_expected_combinations(self) -> None:
+        """Clear all expected combinations"""
+        self.execute("TRUNCATE TABLE expected_combinations")
 
 # Singleton & helper
 _db = PostgresDB()

@@ -20,17 +20,15 @@ RUN mkdir -p /app/data/logs /app/data/models /app/data/figures
 # Copy requirements file separately to leverage Docker cache
 COPY backend/requirements.txt .
 
-# Debug: Verify requirements.txt exists
-RUN ls -la
-
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend code
 COPY backend/ .
 
-# Copy admin registration script
-COPY backend/register_admin.py .
+# Copy startup script
+COPY backend/start_db.sh .
+RUN chmod +x start_db.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -38,11 +36,13 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=5001 \
     LOG_LEVEL=info \
     SECRET_KEY="powerball_secret_key_change_in_production" \
+    ADMIN_USERNAME="admin" \
     ADMIN_PASSWORD="powerball_admin" \
+    ADMIN_EMAIL="admin@example.com" \
     ENABLE_SCHEDULER=true
 
 # Expose the API port
 EXPOSE 5001
 
-# Start the application
-CMD ["python", "main.py"]
+# Start the application using the startup script
+CMD ["./start_db.sh"]

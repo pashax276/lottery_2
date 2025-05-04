@@ -93,7 +93,11 @@ def create_user(user_data: UserCreate) -> Optional[Dict[str, Any]]:
             return None
         
         # Create user stats
-        db.get_user_stats(result[0]['id'])
+        db.execute("""
+            INSERT INTO user_stats (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO NOTHING
+        """, (result[0]['id'],))
         
         return result[0]
     
@@ -175,41 +179,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
 
 def init_auth_schema() -> None:
     """Initialize authentication schema"""
-    db = get_db()
-    
-    # Check if password_hash column exists in users table, if not add it
-    query = """
-    DO $$ 
-    BEGIN
-        IF NOT EXISTS (
-            SELECT FROM information_schema.columns 
-            WHERE table_name = 'users' AND column_name = 'password_hash'
-        ) THEN
-            ALTER TABLE users ADD COLUMN password_hash TEXT;
-        END IF;
-    END $$;
-    """
-    
-    db.execute(query)
-    
-    # Create admin user if it doesn't exist
-    query = "SELECT * FROM users WHERE username = 'admin'"
-    result = db.execute(query)
-    
-    if not result:
-        # Create admin user
-        admin_password = os.environ.get("ADMIN_PASSWORD", "powerball_admin")
-        admin_username = os.environ.get("ADMIN_USERNAME", "admin")
-        admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
-        
-        create_user(UserCreate(
-            username=admin_username,
-            email=admin_email,
-            password=admin_password
-        ))
-        logger.info(f"Created admin user: {admin_username}")
+    # The admin user creation is now handled in db.py
+    logger.info("Authentication schema initialization called")
 
-async def get_optional_user(token: Optional[str] = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
+async def get_optional_user(token: str = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
     """Get the current user if authenticated, or None"""
     try:
         if token:
@@ -217,37 +190,3 @@ async def get_optional_user(token: Optional[str] = Depends(oauth2_scheme)) -> Op
         return None
     except HTTPException:
         return None
-
-# Schema modification
-def init_auth_schema() -> None:
-    """Initialize authentication schema"""
-    db = get_db()
-    
-    # Add password_hash column to users table if it doesn't exist
-    query = """
-    DO $$ 
-    BEGIN
-        IF NOT EXISTS (
-            SELECT FROM information_schema.columns 
-            WHERE table_name = 'users' AND column_name = 'password_hash'
-        ) THEN
-            ALTER TABLE users ADD COLUMN password_hash TEXT;
-        END IF;
-    END $$;
-    """
-    
-    db.execute(query)
-    
-    # Create admin user if it doesn't exist
-    query = "SELECT * FROM users WHERE username = 'admin'"
-    result = db.execute(query)
-    
-    if not result:
-        # Create admin user
-        admin_password = os.environ.get("ADMIN_PASSWORD", "powerball_admin")
-        create_user(UserCreate(
-            username="admin",
-            email="admin@example.com",
-            password=admin_password
-        ))
-        logger.info("Created admin user")
