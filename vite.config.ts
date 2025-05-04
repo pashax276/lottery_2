@@ -8,10 +8,18 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   server: {
+    host: true,
+    port: 5173,
     proxy: {
       '/api': {
-        target: 'http://backend:5001',
+        target: 'http://localhost:5001',
         changeOrigin: true,
+        secure: false,
+      },
+      '/socket.io': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        ws: true,
       },
     },
   },

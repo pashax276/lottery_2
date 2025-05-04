@@ -1133,6 +1133,34 @@ async def reset_database_schema():
         logger.error(f"Error resetting database schema: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error resetting database schema: {str(e)}")
 
+@app.get("/api/debug/test")
+async def debug_test():
+    """Debug endpoint to test if API calls are reaching the backend"""
+    logger.info("Debug test endpoint called")
+    
+    # Test database connection
+    db = get_db()
+    db_connected = db.connect()
+    
+    # Try to get a simple count of draws
+    draw_count = 0
+    if db_connected:
+        try:
+            draws = db.get_draws(limit=1)
+            draw_count = len(draws)
+        except Exception as e:
+            logger.error(f"Error getting draws in debug endpoint: {e}")
+    
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "database_connected": db_connected,
+        "draw_count": draw_count,
+        "message": "Debug endpoint working",
+        "headers": dict(request.headers),
+        "url": str(request.url)
+    }
+
 # Background tasks
 async def run_analytics_tasks():
     """Run all analytics tasks"""
