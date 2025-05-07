@@ -4,19 +4,34 @@ import { Brain, Sparkles, TrendingUp, RefreshCw, AlertCircle } from 'lucide-reac
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
-import { getPredictions } from '../lib/api';
-import { processWhiteBalls, processPowerball } from '../utils/dataUtils';
 
 interface Prediction {
   white_balls: number[];
   powerball: number;
   confidence: number;
   method: string;
-  timestamp?: string;
-  reason?: string;
+  created_at?: string;
+  rationale?: string;
 }
 
-function Predictions() {
+const processWhiteBalls = (whiteBalls: any): number[] => {
+  if (Array.isArray(whiteBalls)) {
+    return whiteBalls.map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball);
+  }
+  if (typeof whiteBalls === 'string' && whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
+    const cleaned = whiteBalls.slice(1, -1);
+    return cleaned.split(',').map(item => parseInt(item.trim(), 10));
+  }
+  return [1, 2, 3, 4, 5];
+};
+
+const processPowerball = (powerball: any): number => {
+  if (typeof powerball === 'number') return powerball;
+  if (typeof powerball === 'string') return parseInt(powerball, 10) || 1;
+  return 1;
+};
+
+const Predictions = () => {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,49 +45,123 @@ function Predictions() {
     setError(null);
     
     try {
-      const response = await getPredictions();
+      // Get token from localStorage
+      const token = localStorage.getItem('token');
       
-      // Handle different response formats
-      let predictionsData: Prediction[] = [];
+      const response = await fetch('/api/predictions?limit=10', {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+          'Content-Type': 'application/json',
+        },
+      });
       
-      if (Array.isArray(response)) {
-        predictionsData = response;
-      } else if (response && response.predictions) {
-        predictionsData = response.predictions;
-      } else if (response && response.data) {
-        predictionsData = response.data;
-      } else {
-        console.log('Unexpected response format:', response);
-        predictionsData = [];
+      if (response.status === 500) {
+        // If backend has an error, show a message but don't crash
+        console.error('Backend error fetching predictions');
+        setError('Server error - please try again later');
+        setPredictions([]);
+        return;
       }
       
-      // Process predictions to ensure proper data format
-      const processedPredictions = predictionsData.map((pred: any) => ({
-        white_balls: processWhiteBalls(pred.white_balls),
-        powerball: processPowerball(pred.powerball),
-        confidence: pred.confidence || 0,
-        method: pred.method || 'unknown',
-        timestamp: pred.timestamp || new Date().toISOString(),
-        reason: pred.reason || pred.rationale
-      }));
+      if (response.status === 401) {
+        // Handle unauthorized - predictions might be public, let's try without token
+        const publicResponse = await fetch('/api/predictions?limit=10');
+        
+        if (!publicResponse.ok) {
+          throw new Error('Authentication required');
+        }
+        
+        const predictionsData = await publicResponse.json();
+        processPredictions(predictionsData);
+        return;
+      }
       
-      setPredictions(processedPredictions);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const predictionsData = await response.json();
+      processPredictions(predictionsData);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch predictions';
       setError(errorMessage);
       console.error('Error fetching predictions:', err);
+      setPredictions([]); // Set empty array on error
     } finally {
       setLoading(false);
     }
   };
 
+  const processPredictions = (predictionsData: any) => {
+    // Handle different response formats
+    let processedPredictions: Prediction[] = [];
+    
+    if (Array.isArray(predictionsData)) {
+      processedPredictions = predictionsData;
+    } else if (predictionsData && predictionsData.predictions) {
+      processedPredictions = predictionsData.predictions;
+    } else if (predictionsData && predictionsData.data) {
+      processedPredictions = predictionsData.data;
+    } else {
+      console.log('Unexpected response format:', predictionsData);
+      processedPredictions = [];
+    }
+    
+    // Process predictions to ensure proper data format
+    const finalPredictions = processedPredictions.map((pred: any) => ({
+      white_balls: processWhiteBalls(pred.white_balls),
+      powerball: processPowerball(pred.powerball),
+      confidence: pred.confidence || 0,
+      method: pred.method || 'unknown',
+      created_at: pred.created_at || new Date().toISOString(),
+      rationale: pred.rationale || ''
+    }));
+    
+    setPredictions(finalPredictions);
+  };
+
   const handleRefresh = async () => {
-    showToast.loading('Refreshing predictions...');
     await fetchPredictions();
     showToast.success('Predictions updated!');
   };
 
-  if (loading) {
+  const generatePrediction = async (method: string) => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      
+      const response = await fetch('/api/predictions', {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ method, user_id: 1 }),
+      });
+
+      if (response.status === 500) {
+        showToast.error('Server error - please try again later');
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        showToast.success('New prediction generated!');
+        fetchPredictions();
+      }
+    } catch (err) {
+      showToast.error('Failed to generate prediction');
+      console.error('Error generating prediction:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading && predictions.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSpinner size={50} />
@@ -80,7 +169,7 @@ function Predictions() {
     );
   }
 
-  if (error) {
+  if (error && predictions.length === 0) {
     return (
       <div className="bg-red-50 p-6 rounded-lg shadow-sm">
         <div className="flex items-center space-x-3 mb-4">
@@ -107,14 +196,32 @@ function Predictions() {
             <Brain className="h-8 w-8 text-blue-600" />
             <h2 className="text-2xl font-bold text-gray-900">Predictions</h2>
           </div>
-          <button
-            onClick={handleRefresh}
-            className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            disabled={loading}
-          >
-            <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
-          </button>
+          <div className="flex space-x-2">
+            <button
+              onClick={() => generatePrediction('pattern')}
+              className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              disabled={loading}
+            >
+              <Brain className="h-5 w-5" />
+              <span>Generate Pattern</span>
+            </button>
+            <button
+              onClick={() => generatePrediction('machine-learning')}
+              className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              disabled={loading}
+            >
+              <Brain className="h-5 w-5" />
+              <span>Generate ML</span>
+            </button>
+            <button
+              onClick={handleRefresh}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              disabled={loading}
+            >
+              <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -123,7 +230,7 @@ function Predictions() {
         <div className="bg-white rounded-xl shadow-sm p-8 text-center">
           <Brain className="h-12 w-12 text-gray-400 mx-auto mb-4" />
           <h3 className="text-lg font-medium text-gray-900 mb-2">No predictions available</h3>
-          <p className="text-gray-500">Try refreshing to get the latest predictions.</p>
+          <p className="text-gray-500 mb-4">Generate predictions using the buttons above.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -161,15 +268,18 @@ function Predictions() {
                 />
               </div>
 
-              {prediction.reason && (
-                <p className="text-sm text-gray-600 mt-2">{prediction.reason}</p>
+              {prediction.rationale && (
+                <p className="text-sm text-gray-600 mt-2">{prediction.rationale}</p>
               )}
+              <p className="text-xs text-gray-400 mt-2">
+                Generated: {new Date(prediction.created_at || '').toLocaleString()}
+              </p>
             </div>
           ))}
         </div>
       )}
     </div>
   );
-}
+};
 
 export default Predictions;

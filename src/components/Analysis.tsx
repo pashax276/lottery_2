@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts';
-import { BarChart3, PieChart, TrendingUp, Activity, Grid as GridIcon, Save, Filter, RefreshCw } from 'lucide-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import React, { useState, useEffect, useCallback } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart3, TrendingUp, Activity, Grid as GridIcon, Save, RefreshCw } from 'lucide-react';
 import NumberBall from './NumberBall';
 import useLocalStorage from '../hooks/useLocalStorage';
-import { getFrequencyAnalysis, getHotNumbers, getDueNumbers, getPairs, getPositions, getPredictions } from '../lib/api';
 
 interface FrequencyData {
   number: string;
@@ -26,106 +24,168 @@ interface PredictionData {
   powerball: number;
   confidence: number;
   method: string;
+  rationale?: string;
 }
 
 const Analysis = () => {
-  const queryClient = useQueryClient();
   const [tab, setTab] = useLocalStorage<string>('analysis_tab', 'frequency');
   const [loading, setLoading] = useState(false);
-  const [viewMode, setViewMode] = useLocalStorage<'tiles' | 'charts'>('analysis_viewMode', 'tiles');
+  const [error, setError] = useState<string | null>(null);
+  const [whiteBallFrequency, setWhiteBallFrequency] = useState<FrequencyData[]>([]);
+  const [powerBallFrequency, setPowerBallFrequency] = useState<FrequencyData[]>([]);
+  const [hotNumbers, setHotNumbers] = useState<{ white_balls: any; powerballs: any }>({ white_balls: {}, powerballs: {} });
+  const [dueNumbers, setDueNumbers] = useState<{ white_balls: any; powerballs: any }>({ white_balls: {}, powerballs: {} });
+  const [pairData, setPairData] = useState<{ common_pairs: PairData[] }>({ common_pairs: [] });
+  const [positionData, setPositionData] = useState<{ positions: PositionData[] }>({ positions: [] });
+  const [predictions, setPredictions] = useState<PredictionData[]>([]);
+  
   const [lookback, setLookback] = useLocalStorage<number>('analysis_lookback', 50);
   const [selectedPosition, setSelectedPosition] = useLocalStorage<number>('analysis_position', 1);
-  const [darkMode, setDarkMode] = useLocalStorage<boolean>('analysis_darkMode', false);
   const [customCombination, setCustomCombination] = useState<string>('');
 
-  // React Query hooks with proper data handling
-  const { data: frequencyData = [], refetch: refetchFrequency } = useQuery({
-    queryKey: ['frequency', lookback],
-    queryFn: async () => {
-      try {
-        const result = await getFrequencyAnalysis();
-        if (!result || !result.white_balls) return [];
-        
-        return Object.entries(result.white_balls)
+  useEffect(() => {
+    if (tab === 'frequency') fetchFrequencyData();
+    if (tab === 'hot-due') {
+      fetchHotNumbers();
+      fetchDueNumbers();
+    }
+    if (tab === 'pairs') fetchPairData();
+    if (tab === 'positions') fetchPositionData();
+    if (tab === 'predictions') fetchPredictions();
+  }, [tab, lookback]);
+
+  const fetchFrequencyData = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('/api/insights/frequency');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const result = await response.json();
+      if (result && result.white_balls && result.powerballs) {
+        const whiteData = Object.entries(result.white_balls)
           .map(([num, freq]) => ({ number: num, frequency: Number(freq) }))
           .sort((a, b) => parseInt(a.number) - parseInt(b.number));
-      } catch (error) {
-        console.error('Error fetching frequency data:', error);
-        return [];
+        const powerData = Object.entries(result.powerballs)
+          .map(([num, freq]) => ({ number: num, frequency: Number(freq) }))
+          .sort((a, b) => parseInt(a.number) - parseInt(b.number));
+        setWhiteBallFrequency(whiteData);
+        setPowerBallFrequency(powerData);
       }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+    } catch (error) {
+      console.error('Error fetching frequency data:', error);
+      setError('Failed to fetch frequency data');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const { data: hotNumbers = { white_balls: {}, powerballs: {} } } = useQuery({
-    queryKey: ['hotNumbers'],
-    queryFn: async () => {
-      try {
-        const result = await getHotNumbers();
-        return result || { white_balls: {}, powerballs: {} };
-      } catch (error) {
-        console.error('Error fetching hot numbers:', error);
-        return { white_balls: {}, powerballs: {} };
-      }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+  const fetchHotNumbers = async () => {
+    try {
+      const response = await fetch('/api/insights/hot');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result = await response.json();
+      setHotNumbers(result || { white_balls: {}, powerballs: {} });
+    } catch (error) {
+      console.error('Error fetching hot numbers:', error);
+    }
+  };
 
-  const { data: dueNumbers = { white_balls: {}, powerballs: {} } } = useQuery({
-    queryKey: ['dueNumbers'],
-    queryFn: async () => {
-      try {
-        const result = await getDueNumbers();
-        return result || { white_balls: {}, powerballs: {} };
-      } catch (error) {
-        console.error('Error fetching due numbers:', error);
-        return { white_balls: {}, powerballs: {} };
-      }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+  const fetchDueNumbers = async () => {
+    try {
+      const response = await fetch('/api/insights/due');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result = await response.json();
+      setDueNumbers(result || { white_balls: {}, powerballs: {} });
+    } catch (error) {
+      console.error('Error fetching due numbers:', error);
+    }
+  };
 
-  const { data: pairData = { common_pairs: [] } } = useQuery({
-    queryKey: ['pairs'],
-    queryFn: async () => {
-      try {
-        const result = await getPairs();
-        return result || { common_pairs: [] };
-      } catch (error) {
-        console.error('Error fetching pair data:', error);
-        return { common_pairs: [] };
-      }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+  const fetchPairData = async () => {
+    try {
+      const response = await fetch('/api/insights/pairs');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result = await response.json();
+      setPairData(result || { common_pairs: [] });
+    } catch (error) {
+      console.error('Error fetching pair data:', error);
+    }
+  };
 
-  const { data: positionData = { positions: [] } } = useQuery({
-    queryKey: ['positions'],
-    queryFn: async () => {
-      try {
-        const result = await getPositions();
-        return result || { positions: [] };
-      } catch (error) {
-        console.error('Error fetching position data:', error);
-        return { positions: [] };
-      }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+  const fetchPositionData = async () => {
+    try {
+      const response = await fetch('/api/insights/positions');
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result = await response.json();
+      setPositionData(result || { positions: [] });
+    } catch (error) {
+      console.error('Error fetching position data:', error);
+    }
+  };
 
-  const { data: predictions = [] } = useQuery({
-    queryKey: ['predictions'],
-    queryFn: async () => {
-      try {
-        const result = await getPredictions('all');
-        return Array.isArray(result) ? result : [];
-      } catch (error) {
-        console.error('Error fetching predictions:', error);
-        return [];
+  const fetchPredictions = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = localStorage.getItem('token');
+      const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
-    },
-    staleTime: 1000 * 60 * 5,
-  });
+
+      const response = await fetch('/api/predictions?limit=10', { headers });
+      
+      if (response.status === 401) {
+        const publicResponse = await fetch('/api/predictions?limit=10');
+        if (!publicResponse.ok) {
+          throw new Error('Authentication required to view predictions. Please log in.');
+        }
+        const publicResult = await publicResponse.json();
+        processPredictions(publicResult);
+        return;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      processPredictions(result);
+    } catch (error) {
+      console.error('Error fetching predictions:', error);
+      setError(error instanceof Error ? error.message : 'Failed to fetch predictions');
+      setPredictions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const processPredictions = (predictionsData: any) => {
+    let processedPredictions: PredictionData[] = [];
+    if (Array.isArray(predictionsData)) {
+      processedPredictions = predictionsData;
+    } else if (predictionsData && predictionsData.predictions) {
+      processedPredictions = predictionsData.predictions;
+    } else if (predictionsData && predictionsData.data) {
+      processedPredictions = predictionsData.data;
+    } else {
+      console.log('Unexpected response format:', predictionsData);
+      processedPredictions = [];
+    }
+    
+    const finalPredictions = processedPredictions.map((pred: any) => ({
+      white_balls: Array.isArray(pred.white_balls) ? pred.white_balls : JSON.parse(pred.white_balls || '[]'),
+      powerball: Number(pred.powerball) || 1,
+      confidence: Number(pred.confidence) || 0,
+      method: pred.method || 'unknown',
+      rationale: pred.rationale || ''
+    }));
+    
+    setPredictions(finalPredictions);
+  };
 
   const handleCustomCombination = useCallback(async () => {
     if (!customCombination) return;
@@ -133,7 +193,6 @@ const Analysis = () => {
     try {
       setLoading(true);
       const numbers = customCombination.split(',').map(Number);
-      
       if (numbers.length !== 6 || numbers.some(isNaN)) {
         alert('Please enter 5 white balls (1-69) and 1 Powerball (1-26) separated by commas');
         return;
@@ -142,13 +201,11 @@ const Analysis = () => {
       const whiteBalls = numbers.slice(0, 5);
       const powerball = numbers[5];
       
-      // Validate ranges
       if (!whiteBalls.every(n => n >= 1 && n <= 69) || powerball < 1 || powerball > 26) {
         alert('White balls must be 1-69 and Powerball must be 1-26');
         return;
       }
       
-      // Save combination (you would implement this API call)
       console.log('Saving combination:', { whiteBalls, powerball });
       alert('Custom combination saved!');
       setCustomCombination('');
@@ -161,12 +218,21 @@ const Analysis = () => {
   }, [customCombination]);
 
   const refreshData = () => {
-    queryClient.invalidateQueries(['frequency']);
-    queryClient.invalidateQueries(['hotNumbers']);
-    queryClient.invalidateQueries(['dueNumbers']);
-    queryClient.invalidateQueries(['pairs']);
-    queryClient.invalidateQueries(['positions']);
-    queryClient.invalidateQueries(['predictions']);
+    if (tab === 'frequency') fetchFrequencyData();
+    if (tab === 'hot-due') {
+      fetchHotNumbers();
+      fetchDueNumbers();
+    }
+    if (tab === 'pairs') fetchPairData();
+    if (tab === 'positions') fetchPositionData();
+    if (tab === 'predictions') fetchPredictions();
+  };
+
+  const getBadgeClass = (method: string) => {
+    if (method.toLowerCase().includes('machine-learning')) {
+      return 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800';
+    }
+    return 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800';
   };
 
   return (
@@ -219,16 +285,37 @@ const Analysis = () => {
         {tab === 'frequency' && (
           <div>
             <h3 className="text-lg font-semibold mb-4">Number Frequency Analysis</h3>
-            <div className="h-96">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={frequencyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="number" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="frequency" fill="#3B82F6" />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="space-y-8">
+              {/* White Ball Frequency */}
+              <div>
+                <h4 className="text-md font-medium text-gray-700 mb-2">White Balls (1-69)</h4>
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={whiteBallFrequency}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="number" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="frequency" fill="#3B82F6" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              {/* Powerball Frequency */}
+              <div>
+                <h4 className="text-md font-medium text-gray-700 mb-2">Powerballs (1-26)</h4>
+                <div className="h-96">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={powerBallFrequency}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="number" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="frequency" fill="#EF4444" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -322,24 +409,63 @@ const Analysis = () => {
         {tab === 'predictions' && (
           <div>
             <h3 className="text-lg font-semibold mb-4">Prediction Trends</h3>
-            <div className="space-y-4">
-              {predictions.map((prediction, index) => (
-                <div key={index} className="bg-gray-50 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium">{prediction.method}</span>
-                    <span className="text-sm text-gray-600">
-                      {Math.round(prediction.confidence)}% confidence
-                    </span>
+            {loading ? (
+              <div className="text-center py-4">
+                <p className="text-gray-600">Loading predictions...</p>
+              </div>
+            ) : error ? (
+              <div className="bg-red-50 rounded-lg p-4 text-center">
+                <p className="text-red-600 mb-2">{error}</p>
+                {error.includes('Authentication required') ? (
+                  <p className="text-gray-600">Please log in to view predictions or generate new ones.</p>
+                ) : (
+                  <button
+                    onClick={refreshData}
+                    className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            ) : predictions.length === 0 ? (
+              <div className="bg-gray-50 rounded-lg p-4 text-center">
+                <p className="text-gray-600 mb-2">No predictions available. Generate some to get started!</p>
+                <button
+                  onClick={refreshData}
+                  className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Refresh Predictions
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {predictions.map((prediction, index) => (
+                  <div key={index} className="bg-gray-50 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center space-x-2">
+                        <span className={getBadgeClass(prediction.method)}>
+                          {prediction.method}
+                        </span>
+                        {prediction.rationale && (
+                          <span className="text-sm text-gray-500" title={prediction.rationale}>
+                            (i)
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-sm text-gray-600">
+                        {Math.round(prediction.confidence)}% confidence
+                      </span>
+                    </div>
+                    <div className="flex space-x-2">
+                      {prediction.white_balls.map((number, idx) => (
+                        <NumberBall key={idx} number={number} />
+                      ))}
+                      <NumberBall number={prediction.powerball} isPowerball />
+                    </div>
                   </div>
-                  <div className="flex space-x-2">
-                    {prediction.white_balls.map((number, idx) => (
-                      <NumberBall key={idx} number={number} />
-                    ))}
-                    <NumberBall number={prediction.powerball} isPowerball />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

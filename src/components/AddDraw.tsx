@@ -1,11 +1,10 @@
+// src/components/AddDraw.tsx
 import React, { useState, useEffect } from 'react';
 import { Plus } from 'lucide-react';
-import { addDraw } from '../lib/api';
 import { showToast } from './Toast';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 
-// Define an interface for validation errors
 interface ValidationResult {
   isValid: boolean;
   errors: string[];
@@ -27,11 +26,9 @@ const AddDraw = () => {
   
   // Perform validation whenever form fields change
   useEffect(() => {
-    // Only validate if we have values to validate
     if (drawNumber || drawDate || numbers.some(n => n !== '')) {
       validateForm();
     } else {
-      // Reset validation if form is empty
       setValidation({ isValid: true, errors: [] });
       setShowPreview(false);
     }
@@ -40,7 +37,6 @@ const AddDraw = () => {
   // Specific validation for draw number with API check
   useEffect(() => {
     const validateDrawNumber = async () => {
-      // Only proceed if we have a draw number
       if (!drawNumber) {
         setDrawNumberError(null);
         return;
@@ -48,15 +44,13 @@ const AddDraw = () => {
 
       const numDrawNumber = parseInt(drawNumber, 10);
       
-      // Basic validation
       if (isNaN(numDrawNumber) || numDrawNumber <= 0) {
         setDrawNumberError('Draw number must be a positive number');
         return;
       }
 
       try {
-        // Check if draw number already exists
-        const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5001'}/api/draws/${numDrawNumber}`);
+        const response = await fetch(`/api/draws/${numDrawNumber}`);
         const data = await response.json();
         
         if (response.ok && data.draw) {
@@ -65,61 +59,49 @@ const AddDraw = () => {
           setDrawNumberError(null);
         }
       } catch (err) {
-        // If there's an error with the API call, just continue without the check
         console.error('Error checking draw number:', err);
         setDrawNumberError(null);
       }
     };
 
-    // Debounce the validation to avoid too many API calls
     const timeoutId = setTimeout(validateDrawNumber, 500);
-    
-    // Cleanup
     return () => clearTimeout(timeoutId);
   }, [drawNumber]);
 
   const validateForm = () => {
     const errors: string[] = [];
     
-    // Convert to numbers for validation
     const numDrawNumber = drawNumber ? parseInt(drawNumber, 10) : NaN;
     const numWhiteBalls = numbers.slice(0, 5).map(ball => ball ? parseInt(ball, 10) : NaN);
     const numPowerball = numbers[5] ? parseInt(numbers[5], 10) : NaN;
     
-    // Check draw number
     if (isNaN(numDrawNumber) || numDrawNumber <= 0) {
       errors.push('Draw number must be a positive number');
     }
     
-    // Check draw date
     if (!drawDate) {
       errors.push('Draw date is required');
     } else {
-      // Validate date format (YYYY-MM-DD)
       if (!/^\d{4}-\d{2}-\d{2}$/.test(drawDate)) {
         errors.push('Draw date must be in YYYY-MM-DD format');
       }
     }
     
-    // Check white balls
     if (numWhiteBalls.some(ball => isNaN(ball))) {
       errors.push('All white balls are required');
     } else {
-      // Check white ball ranges
       for (let i = 0; i < numWhiteBalls.length; i++) {
         if (numWhiteBalls[i] < 1 || numWhiteBalls[i] > 69) {
           errors.push(`White ball #${i + 1} must be between 1 and 69`);
         }
       }
       
-      // Check for duplicates
       const uniqueWhiteBalls = new Set(numWhiteBalls);
       if (uniqueWhiteBalls.size !== 5) {
         errors.push('White balls must be unique');
       }
     }
     
-    // Check powerball
     if (isNaN(numPowerball)) {
       errors.push('Powerball is required');
     } else if (numPowerball < 1 || numPowerball > 26) {
@@ -146,7 +128,6 @@ const AddDraw = () => {
       setDrawDate(value);
     }
     
-    // Clear error and success message when form changes
     setError(null);
     setSuccessMessage(null);
   };
@@ -156,7 +137,6 @@ const AddDraw = () => {
     newNumbers[index] = value;
     setNumbers(newNumbers);
     
-    // Clear error and success message when form changes
     setError(null);
     setSuccessMessage(null);
   };
@@ -164,7 +144,6 @@ const AddDraw = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Double-check validation
     const validationResult = validateForm();
     
     if (!validationResult.isValid || drawNumberError) {
@@ -177,22 +156,41 @@ const AddDraw = () => {
 
     try {
       const numericNumbers = numbers.map(n => parseInt(n, 10));
-      await addDraw(
-        parseInt(drawNumber, 10),
-        drawDate,
-        numericNumbers.slice(0, 5),
-        numericNumbers[5]
-      );
       
-      // Show success message instead of redirecting
-      setSuccessMessage(`Draw #${drawNumber} added successfully!`);
-      showToast.success('Draw added successfully');
+      const response = await fetch('/api/draws/add', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          draw_number: parseInt(drawNumber, 10),
+          draw_date: drawDate,
+          white_balls: numericNumbers.slice(0, 5),
+          powerball: numericNumbers[5],
+          jackpot_amount: 0,
+          winners: 0,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData || 'Failed to add draw');
+      }
+
+      const result = await response.json();
       
-      // Reset form after successful submission
-      setDrawNumber('');
-      setDrawDate('');
-      setNumbers(['', '', '', '', '', '']);
-      setDrawNumberError(null);
+      if (result.success) {
+        setSuccessMessage(`Draw #${drawNumber} added successfully!`);
+        showToast.success('Draw added successfully');
+        
+        // Reset form
+        setDrawNumber('');
+        setDrawDate('');
+        setNumbers(['', '', '', '', '', '']);
+        setDrawNumberError(null);
+      } else {
+        throw new Error(result.error || 'Failed to add draw');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add draw');
       showToast.error(err instanceof Error ? err.message : 'Failed to add draw');
@@ -361,24 +359,22 @@ const AddDraw = () => {
         {error && (
           <div className="text-red-600 text-sm">{error}</div>
         )}
-
         <button
-          type="submit"
-          disabled={loading || !validation.isValid || !!drawNumberError}
-          className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+        type="submit"
+        disabled={loading || !validation.isValid || !!drawNumberError}
+        className="w-full py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
         >
-          {loading ? (
-            <span className="flex items-center justify-center">
-              <LoadingSpinner size={20} color="#ffffff" />
-              <span className="ml-2">Adding...</span>
-            </span>
-          ) : (
-            'Add Draw'
-          )}
-        </button>
-      </form>
-    </div>
-  );
+        {loading ? (
+          <span className="flex items-center justify-center">
+            <LoadingSpinner size={20} color="#ffffff" />
+            <span className="ml-2">Adding...</span>
+          </span>
+        ) : (
+          'Add Draw'
+        )}
+      </button>
+    </form>
+  </div>
+);
 };
-
 export default AddDraw;
