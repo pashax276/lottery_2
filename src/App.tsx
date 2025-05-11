@@ -11,7 +11,7 @@ import Analysis from './components/Analysis';
 import History from './components/History';
 import Settings from './components/Settings';
 import DrawManagement from './components/DrawManagement';
-import CheckNumbers from './components/CheckNumbers'; // Added import
+import CheckNumbers from './components/CheckNumbers'; 
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { getCurrentUser, isAuthenticated, logout } from './lib/api';
@@ -20,6 +20,14 @@ import { User, LogOut } from 'lucide-react';
 console.log('[App] Starting application...');
 console.log('[App] Current URL:', window.location.href);
 console.log('[App] API_URL from env:', import.meta.env.VITE_API_URL);
+
+// Safe toString utility to prevent "Cannot read properties of undefined (toString)" errors
+const safeToString = (value: any): string => {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value);
+};
 
 interface UserContextType {
   user: { id: number; username: string; is_admin: boolean } | null;
@@ -69,55 +77,107 @@ function AppContent() {
 
   useEffect(() => {
     console.log('[AppContent] Location changed:', location.pathname);
-    if (isAuthenticated()) {
-      try {
-        const currentUser = getCurrentUser();
-        console.log('[AppContent] Current user from getCurrentUser:', currentUser);
-        if (currentUser) {
-          fetch('/api/auth/me', {
-            headers: {
-              'Authorization': `Bearer ${localStorage.getItem('token')}`,
-              'Content-Type': 'application/json',
-            },
-          })
-            .then(response => {
-              if (!response.ok) {
-                throw new Error('Failed to fetch user data');
-              }
-              return response.json();
-            })
-            .then(data => {
-              setUser({ id: data.id, username: data.username, is_admin: data.is_admin });
-            })
-            .catch(error => {
-              console.error('[AppContent] Error fetching user data:', error);
-              logout();
-              setUser(null);
-              navigate('/login');
+    
+    const loadUserData = async () => {
+      if (isAuthenticated()) {
+        try {
+          // Get basic user info from localStorage
+          let userFromStorage = null;
+          try {
+            const currentUser = getCurrentUser();
+            console.log('[AppContent] Current user from getCurrentUser:', currentUser);
+            if (currentUser) {
+              userFromStorage = {
+                id: currentUser.id || 0,
+                username: currentUser.username || 'anonymous',
+                is_admin: false // Will be updated from API
+              };
+            }
+          } catch (localStorageError) {
+            console.error('[AppContent] Error reading from localStorage:', localStorageError);
+          }
+          
+          // Get full user details from API
+          const token = localStorage.getItem('token');
+          if (!token) {
+            throw new Error('No auth token found');
+          }
+          
+          try {
+            const response = await fetch('/api/auth/me', {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
             });
+            
+            if (!response.ok) {
+              throw new Error(`Failed to fetch user data: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            // Set user with data from API, falling back to localStorage data if needed
+            setUser({ 
+              id: data.id || userFromStorage?.id || 0, 
+              username: data.username || userFromStorage?.username || 'anonymous', 
+              is_admin: !!data.is_admin
+            });
+          } catch (apiError) {
+            console.error('[AppContent] Error fetching user data from API:', apiError);
+            
+            // If API fails but we have localStorage data, use that
+            if (userFromStorage) {
+              setUser(userFromStorage);
+            } else {
+              throw apiError; // Re-throw if we don't have fallback data
+            }
+          }
+        } catch (error) {
+          console.error('[AppContent] Error getting current user:', error);
+          
+          // Clear auth data and redirect to login
+          logout();
+          setUser(null);
+          navigate('/login');
         }
-      } catch (error) {
-        console.error('[AppContent] Error getting current user:', error);
-        logout();
+      } else {
         setUser(null);
-        navigate('/login');
       }
-    } else {
-      setUser(null);
-    }
+    };
+    
+    loadUserData();
   }, [location.pathname, navigate]);
 
-  const handleLogin = (token: string, userId: number, username: string, isAdmin: boolean) => {
+  const handleLogin = (token: string, userId: number | string, username: string, isAdmin: boolean) => {
     console.log('[AppContent] handleLogin called with:', { token, userId, username, isAdmin });
-    localStorage.setItem('token', token);
-    localStorage.setItem('user_id', userId.toString());
-    localStorage.setItem('username', username);
-    localStorage.setItem('is_admin', isAdmin.toString());
-    setUser({ id: userId, username, is_admin: isAdmin });
-    const from = location.state?.from?.pathname || (isAdmin ? '/' : '/check-numbers');
-    console.log('[AppContent] Navigating to:', from);
-    navigate(from);
-    showToast.success('Logged in successfully');
+    
+    // Store auth data safely
+    try {
+      // Ensure userId is properly stored as a string
+      const userIdString = userId !== undefined && userId !== null ? safeToString(userId) : '0';
+      
+      localStorage.setItem('token', token || '');
+      localStorage.setItem('user_id', userIdString);
+      localStorage.setItem('username', username || 'anonymous');
+      localStorage.setItem('is_admin', safeToString(isAdmin));
+      
+      // Update state
+      setUser({ 
+        id: typeof userId === 'string' ? parseInt(userId, 10) : (userId || 0), 
+        username: username || 'anonymous', 
+        is_admin: !!isAdmin 
+      });
+      
+      // Navigate
+      const from = location.state?.from?.pathname || (isAdmin ? '/' : '/check-numbers');
+      console.log('[AppContent] Navigating to:', from);
+      navigate(from);
+      showToast.success('Logged in successfully');
+    } catch (error) {
+      console.error('[AppContent] Error in handleLogin:', error);
+      showToast.error('Login failed: Could not store credentials');
+    }
   };
 
   const handleLogout = () => {
@@ -197,7 +257,7 @@ function AppContent() {
                   <div className="flex items-center space-x-4">
                     <div className="flex items-center space-x-2 px-3 py-2">
                       <User className="h-5 w-5 text-gray-600" />
-                      <span className="text-sm font-medium">{user.username}</span>
+                      <span className="text-sm font-medium">{user.username || 'Anonymous'}</span>
                     </div>
                     <button
                       onClick={handleLogout}

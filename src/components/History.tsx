@@ -16,31 +16,91 @@ interface Draw {
   winners: number;
 }
 
+/**
+ * Safely process white balls from any format to a normalized array of numbers
+ */
 const processWhiteBalls = (whiteBalls: any): number[] => {
+  // Handle undefined or null
+  if (whiteBalls === undefined || whiteBalls === null) {
+    console.warn('white_balls is undefined or null, using default');
+    return [1, 2, 3, 4, 5];
+  }
+  
+  // Handle array input
   if (Array.isArray(whiteBalls)) {
-    return whiteBalls
-      .map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball)
+    const processed = whiteBalls
+      .map(ball => {
+        if (typeof ball === 'string') {
+          return parseInt(ball, 10);
+        }
+        return ball;
+      })
       .filter(ball => typeof ball === 'number' && !isNaN(ball) && ball >= 1 && ball <= 69)
       .slice(0, 5);
+    
+    // If we don't have 5 numbers after processing, pad with defaults
+    while (processed.length < 5) {
+      processed.push(processed.length + 1);
+    }
+    
+    return processed;
   }
   
-  if (typeof whiteBalls === 'string' && whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
-    const cleaned = whiteBalls.slice(1, -1);
-    return cleaned.split(',')
-      .map(item => parseInt(item.trim(), 10))
-      .filter(num => !isNaN(num) && num >= 1 && num <= 69)
-      .slice(0, 5);
+  // Handle PostgreSQL array string format like "{1,2,3,4,5}"
+  if (typeof whiteBalls === 'string') {
+    try {
+      if (whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
+        const cleaned = whiteBalls.slice(1, -1);
+        const processed = cleaned.split(',')
+          .map(item => parseInt(item.trim(), 10))
+          .filter(num => !isNaN(num) && num >= 1 && num <= 69)
+          .slice(0, 5);
+        
+        // If we don't have 5 numbers after processing, pad with defaults
+        while (processed.length < 5) {
+          processed.push(processed.length + 1);
+        }
+        
+        return processed;
+      } else if (whiteBalls.includes(',')) {
+        // Handle comma-separated string not in PostgreSQL array format
+        const processed = whiteBalls.split(',')
+          .map(item => parseInt(item.trim(), 10))
+          .filter(num => !isNaN(num) && num >= 1 && num <= 69)
+          .slice(0, 5);
+        
+        // If we don't have 5 numbers after processing, pad with defaults
+        while (processed.length < 5) {
+          processed.push(processed.length + 1);
+        }
+        
+        return processed;
+      }
+    } catch (e) {
+      console.error('Error processing white_balls string:', e);
+    }
   }
   
+  // Default fallback
   console.warn('Could not process white_balls:', whiteBalls);
   return [1, 2, 3, 4, 5];
 };
 
+/**
+ * Safely process powerball from any format to a normalized number
+ */
 const processPowerball = (powerball: any): number => {
+  // Handle undefined or null
+  if (powerball === undefined || powerball === null) {
+    return 1;
+  }
+  
+  // Handle numeric input
   if (typeof powerball === 'number' && !isNaN(powerball)) {
     return Math.max(1, Math.min(26, powerball));
   }
   
+  // Handle string input
   if (typeof powerball === 'string') {
     const parsed = parseInt(powerball, 10);
     if (!isNaN(parsed)) {
@@ -48,18 +108,47 @@ const processPowerball = (powerball: any): number => {
     }
   }
   
+  // Handle array input (take first element)
+  if (Array.isArray(powerball) && powerball.length > 0) {
+    return processPowerball(powerball[0]);
+  }
+  
+  // Default fallback
   console.warn('Could not process powerball:', powerball);
   return 1;
 };
 
+/**
+ * Format a number as currency with fallback handling
+ */
 const formatCurrency = (amount: number | string): string => {
-  const numericAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(numericAmount || 0);
+  // Handle undefined or null
+  if (amount === undefined || amount === null) {
+    return '$0';
+  }
+  
+  // Convert string to number if needed
+  const numericAmount = typeof amount === 'string' 
+    ? parseFloat(amount) 
+    : amount;
+  
+  // Check if it's a valid number
+  if (isNaN(numericAmount)) {
+    return '$0';
+  }
+  
+  // Format the number as currency
+  try {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(numericAmount || 0);
+  } catch (e) {
+    console.error('Error formatting currency:', e);
+    return '$' + (numericAmount || 0).toString();
+  }
 };
 
 const History: React.FC = () => {
@@ -102,7 +191,11 @@ const History: React.FC = () => {
         }
         const data = await response.json();
         console.log('[History] /api/auth/me data:', data);
-        setCurrentUser({ id: data.id, username: data.username, is_admin: data.is_admin });
+        setCurrentUser({ 
+          id: data.id || 0, 
+          username: data.username || 'unknown', 
+          is_admin: !!data.is_admin 
+        });
       } catch (err) {
         console.error('[History] Error fetching current user:', err);
         setError(err instanceof Error ? err.message : 'Failed to authenticate user');
@@ -154,15 +247,45 @@ const History: React.FC = () => {
           throw new Error('No draws data returned');
         }
 
-        const processedDraws: Draw[] = data.draws.map((draw: any) => ({
-          id: draw.id?.toString() || '',
-          draw_number: draw.draw_number || 0,
-          draw_date: draw.draw_date || 'Unknown',
-          white_balls: processWhiteBalls(draw.white_balls),
-          powerball: processPowerball(draw.powerball),
-          jackpot_amount: draw.jackpot_amount || 0,
-          winners: draw.winners || 0,
-        }));
+        // Process the draws data with careful error handling
+        const processedDraws: Draw[] = data.draws.map((draw: any) => {
+          // Ensure draw object exists
+          if (!draw) {
+            console.warn('[History] Received null or undefined draw in API response');
+            return {
+              id: '',
+              draw_number: 0,
+              draw_date: 'Unknown',
+              white_balls: [1, 2, 3, 4, 5],
+              powerball: 1,
+              jackpot_amount: 0,
+              winners: 0
+            };
+          }
+          
+          // Safely extract and process id
+          let id = '';
+          try {
+            // Handle different types of IDs (string, number, UUID, etc.)
+            id = draw.id !== undefined && draw.id !== null 
+              ? String(draw.id) 
+              : '';
+          } catch (idError) {
+            console.error('[History] Error converting ID to string:', idError);
+            id = '';
+          }
+          
+          // Process the rest of the fields safely
+          return {
+            id: id,
+            draw_number: draw.draw_number !== undefined ? Number(draw.draw_number) : 0,
+            draw_date: typeof draw.draw_date === 'string' ? draw.draw_date : 'Unknown',
+            white_balls: processWhiteBalls(draw.white_balls),
+            powerball: processPowerball(draw.powerball),
+            jackpot_amount: draw.jackpot_amount !== undefined ? Number(draw.jackpot_amount) : 0,
+            winners: draw.winners !== undefined ? Number(draw.winners) : 0,
+          };
+        });
 
         setDraws(processedDraws);
         setTotalDraws(processedDraws.length);
@@ -181,22 +304,42 @@ const History: React.FC = () => {
     fetchDraws();
   }, [currentUser]);
 
-  const filtered = draws.filter(draw => {
-    const matchesSearch = !searchTerm ||
-      draw.draw_number.toString().includes(searchTerm) ||
-      draw.white_balls.some(ball => ball.toString().includes(searchTerm)) ||
-      draw.powerball.toString().includes(searchTerm);
-
-    const matchesDate = !dateFilter || draw.draw_date.includes(dateFilter);
+  // Apply filters safely to avoid runtime errors
+  const getFilteredDraws = () => {
+    try {
+      return draws.filter(draw => {
+        // Safely check if the draw object has all required properties
+        if (!draw) return false;
+        
+        // Search filter - handles multiple data types
+        const drawNumberStr = draw.draw_number?.toString() || '';
+        const whiteBallsStr = draw.white_balls?.map(b => b.toString()) || [];
+        const powerballStr = draw.powerball?.toString() || '';
+        
+        const matchesSearch = !searchTerm || 
+          drawNumberStr.includes(searchTerm) ||
+          whiteBallsStr.some(ball => ball.includes(searchTerm)) ||
+          powerballStr.includes(searchTerm);
     
-    const matchesWinFilter = 
-      winFilter === 'all' ||
-      (winFilter === 'win' && draw.winners > 0) ||
-      (winFilter === 'lose' && draw.winners === 0);
-      
-    return matchesSearch && matchesDate && matchesWinFilter;
-  });
+        // Date filter
+        const matchesDate = !dateFilter || 
+          (draw.draw_date && draw.draw_date.includes(dateFilter));
+        
+        // Winner filter
+        const matchesWinFilter = 
+          winFilter === 'all' ||
+          (winFilter === 'win' && draw.winners > 0) ||
+          (winFilter === 'lose' && draw.winners === 0);
+          
+        return matchesSearch && matchesDate && matchesWinFilter;
+      });
+    } catch (error) {
+      console.error('[History] Error filtering draws:', error);
+      return [];
+    }
+  };
 
+  const filtered = getFilteredDraws();
   const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const startIndex = (page - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
@@ -343,7 +486,7 @@ const History: React.FC = () => {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {pageItems.map((draw) => (
-                    <tr key={draw.id} className="hover:bg-gray-50">
+                    <tr key={draw.id || draw.draw_number} className="hover:bg-gray-50">
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {draw.draw_number}
                       </td>
