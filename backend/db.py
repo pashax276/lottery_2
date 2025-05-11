@@ -1,4 +1,3 @@
-# db.py
 import os
 import logging
 import psycopg2
@@ -8,6 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import List, Dict, Any, Optional, Tuple
 from passlib.context import CryptContext
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,11 +23,11 @@ class PostgresDB:
         max_retries: int = 15,
         retry_interval: int = 5
     ):
-        self.db_url = db_url or os.environ["DATABASE_URL"]
+        self.db_url = db_url or os.environ.get("DATABASE_URL", "postgresql://powerball:powerball@db:5432/powerball")
         self.max_retries = max_retries
         self.retry_interval = retry_interval
         self.conn = None
-        logger.info(f"Database connector initialized")
+        logger.info("Database connector initialized")
 
     def connect(self) -> bool:
         """Connect to the database (with retries)."""
@@ -89,6 +89,7 @@ class PostgresDB:
               username VARCHAR(100) UNIQUE NOT NULL,
               email VARCHAR(255) UNIQUE,
               password_hash TEXT,
+              is_admin BOOLEAN DEFAULT FALSE,
               created_at TIMESTAMPTZ DEFAULT NOW()
             );
             """,
@@ -174,10 +175,12 @@ class PostgresDB:
               id SERIAL PRIMARY KEY,
               user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
               draw_id INTEGER REFERENCES draws(id) ON DELETE CASCADE,
+              numbers INTEGER[] NOT NULL,
               white_matches INTEGER[] DEFAULT '{}',
               powerball_match BOOLEAN DEFAULT FALSE,
               is_winner BOOLEAN DEFAULT FALSE,
               prize VARCHAR(100),
+              prize_amount NUMERIC(15,2) DEFAULT 0,
               created_at TIMESTAMPTZ DEFAULT NOW()
             );
             """,
@@ -193,9 +196,9 @@ class PostgresDB:
             """,
             # INDEXES
             "CREATE INDEX IF NOT EXISTS idx_draws_number ON draws(draw_number);",
-            "CREATE INDEX IF NOT EXISTS idx_draws_date   ON draws(draw_date);",
-            "CREATE INDEX IF NOT EXISTS idx_numbers_draw  ON numbers(draw_id);",
-            "CREATE INDEX IF NOT EXISTS idx_numbers_num   ON numbers(number);",
+            "CREATE INDEX IF NOT EXISTS idx_draws_date ON draws(draw_date);",
+            "CREATE INDEX IF NOT EXISTS idx_numbers_draw ON numbers(draw_id);",
+            "CREATE INDEX IF NOT EXISTS idx_numbers_num ON numbers(number);",
             "CREATE INDEX IF NOT EXISTS idx_userchecks_draw ON user_checks(draw_id);",
             "CREATE INDEX IF NOT EXISTS idx_predictions_user ON predictions(user_id);",
             # VIEWS
@@ -230,8 +233,8 @@ class PostgresDB:
             if not anon_result:
                 # Create anonymous user
                 self.execute("""
-                    INSERT INTO users (username, email)
-                    VALUES ('anonymous', 'anonymous@example.com')
+                    INSERT INTO users (username, email, is_admin)
+                    VALUES ('anonymous', 'anonymous@example.com', FALSE)
                     ON CONFLICT (username) DO NOTHING
                     RETURNING id
                 """)
@@ -269,8 +272,8 @@ class PostgresDB:
                 hashed_password = pwd_context.hash(admin_password)
                 
                 result = self.execute("""
-                    INSERT INTO users (username, email, password_hash)
-                    VALUES (%s, %s, %s)
+                    INSERT INTO users (username, email, password_hash, is_admin)
+                    VALUES (%s, %s, %s, TRUE)
                     ON CONFLICT (username) DO NOTHING
                     RETURNING id
                 """, (admin_username, admin_email, hashed_password))
@@ -296,19 +299,21 @@ class PostgresDB:
                     hashed_password = pwd_context.hash(admin_password)
                     self.execute("""
                         UPDATE users 
-                        SET password_hash = %s 
+                        SET password_hash = %s, is_admin = TRUE
                         WHERE id = %s
                     """, (hashed_password, admin_id))
-                    logger.info(f"Updated admin password")
+                    logger.info(f"Updated admin password and is_admin")
                 else:
+                    # Ensure is_admin is set
+                    self.execute("""
+                        UPDATE users 
+                        SET is_admin = TRUE
+                        WHERE id = %s AND is_admin = FALSE
+                    """, (admin_id,))
                     logger.info(f"Admin user '{admin_username}' already exists with ID {admin_id}")
                 
         except Exception as e:
             logger.error(f"Error ensuring users: {e}")
-
-    # ----------------------------------------
-    # CRUD & helpers
-    # ----------------------------------------
 
     def get_draws(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         rows = self.execute(
@@ -390,31 +395,36 @@ class PostgresDB:
         white_matches: List[int],
         powerball_match: bool,
         is_winner: bool,
-        prize: str
+        prize: str,
+        prize_amount: float = 0
     ) -> Optional[Dict[str, Any]]:
         rows = self.execute(
             """
             INSERT INTO user_checks
-              (user_id, draw_id, white_matches, powerball_match, is_winner, prize)
-            VALUES (%s, %s, %s, %s, %s, %s)
+              (user_id, draw_id, numbers, white_matches, powerball_match, is_winner, prize, prize_amount)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (user_id, draw_id, white_matches, powerball_match, is_winner, prize)
+            (user_id, draw_id, numbers, white_matches, powerball_match, is_winner, prize, prize_amount)
         )
+        if rows and is_winner:
+            self.update_user_stat(user_id, 'wins')
+        if rows:
+            self.update_user_stat(user_id, 'checks_performed')
         return rows[0] if rows else None
 
     def update_user_stat(self, user_id: int, field: str) -> None:
-        # e.g. field = 'draws_added' or 'checks_performed'
         valid_fields = ['draws_added', 'predictions_made', 'analysis_runs', 'checks_performed', 'wins']
         if field not in valid_fields:
             logger.error(f"Invalid user stat field: {field}")
             return
             
         query = f"""
-            UPDATE user_stats
-               SET {field} = {field} + 1,
-                   updated_at = NOW()
-             WHERE user_id = %s
+            INSERT INTO user_stats (user_id, {field}, updated_at)
+            VALUES (%s, 1, NOW())
+            ON CONFLICT (user_id) DO UPDATE 
+            SET {field} = user_stats.{field} + 1,
+                updated_at = NOW()
         """
         self.execute(query, (user_id,))
 
@@ -615,8 +625,6 @@ class PostgresDB:
 
     def save_analysis_result(self, analysis_type: str, result_data: Dict[str, Any], parameters: Dict[str, Any] = None) -> None:
         """Save analysis results"""
-        import json
-        
         query = """
         INSERT INTO analysis_results (type, parameters, result_data)
         VALUES (%s, %s::jsonb, %s::jsonb)
@@ -674,7 +682,19 @@ class PostgresDB:
         """Clear all expected combinations"""
         self.execute("TRUNCATE TABLE expected_combinations")
 
+    def get_all_users(self) -> List[Dict[str, Any]]:
+        """Get all users for admin selection"""
+        query = """
+        SELECT id, username
+        FROM users
+        ORDER BY username
+        """
+        rows = self.execute(query)
+        return rows or []
+
 # Singleton & helper
 _db = PostgresDB()
 def get_db() -> PostgresDB:
     return _db
+# Initialize schema
+_db.init_schema()

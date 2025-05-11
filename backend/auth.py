@@ -154,8 +154,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
     )
     
     try:
+        # Convert string token to bytes if necessary
+        if isinstance(token, str):
+            token_bytes = token.encode('utf-8')
+        else:
+            token_bytes = token
+            
         # Decode token
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        except Exception as e:
+            logger.error(f"JWT decode error: {str(e)}")
+            try:
+                # Try decoding with token as bytes
+                payload = jwt.decode(token_bytes, SECRET_KEY, algorithms=[ALGORITHM])
+            except Exception as e:
+                logger.error(f"JWT decode error with bytes: {str(e)}")
+                raise credentials_exception
+                
         username = payload.get("sub")
         user_id = payload.get("user_id")
         
@@ -164,7 +180,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any
         
         token_data = TokenData(username=username, user_id=user_id)
     
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as e:
+        logger.error(f"JWT decode error: {str(e)}")
         raise credentials_exception
     
     # Get user from database

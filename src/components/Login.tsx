@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { Lock, User } from 'lucide-react';
+import { showToast } from './Toast';
 
-// Use relative URL for API calls - nginx will proxy to backend
 const API_URL = '';
 
 interface LoginProps {
-  onLogin: (token: string, userId: number, username: string) => void;
+  onLogin: (token: string, userId: number, username: string, isAdmin: boolean) => void;
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
@@ -28,7 +28,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     try {
       if (isRegister) {
         console.log('Attempting registration...');
-        // Register new user
         const registerResponse = await fetch(`${API_URL}/api/auth/register`, {
           method: 'POST',
           headers: {
@@ -49,17 +48,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           throw new Error(errorData || 'Registration failed');
         }
 
-        // After successful registration, switch to login
         setIsRegister(false);
         setLoading(false);
         setError('Registration successful! Please log in.');
+        showToast.success('Registration successful! Please log in.');
         return;
       }
 
       console.log('Attempting login...');
       console.log('Login URL:', `${API_URL}/api/auth/token`);
-      
-      // Login
+
       const formData = new URLSearchParams();
       formData.append('username', username);
       formData.append('password', password);
@@ -85,23 +83,24 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       const data = await response.json();
       console.log('Login successful, response data:', data);
-      
-      // Save token to localStorage
+
       localStorage.setItem('token', data.access_token);
       localStorage.setItem('user_id', data.user_id.toString());
       localStorage.setItem('username', data.username);
-      
+      localStorage.setItem('is_admin', data.is_admin.toString());
+
       console.log('Saved to localStorage:', {
         token: localStorage.getItem('token'),
         user_id: localStorage.getItem('user_id'),
-        username: localStorage.getItem('username')
+        username: localStorage.getItem('username'),
+        is_admin: localStorage.getItem('is_admin'),
       });
-      
-      // Call onLogin callback
-      onLogin(data.access_token, data.user_id, data.username);
+
+      onLogin(data.access_token, data.user_id, data.username, data.is_admin);
     } catch (err) {
       console.error('Login error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
+      showToast.error(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
     }

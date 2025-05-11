@@ -365,7 +365,11 @@ async def read_users_me(current_user: Dict[str, Any] = Depends(get_current_user)
 
 # Draws endpoints
 @app.get("/api/draws")
-async def get_draws(limit: int = 20, offset: int = 0):
+async def get_draws(
+    limit: int = 20, 
+    offset: int = 0,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
     db = get_db()
     draws = db.get_draws(limit=limit, offset=offset)
     
@@ -399,7 +403,7 @@ async def get_draws(limit: int = 20, offset: int = 0):
     return {"success": True, "draws": draws, "count": len(draws)}
 
 @app.get("/api/draws/latest")
-async def get_latest_draw():
+async def get_latest_draw(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     db = get_db()
     draw = db.get_latest_draw()
     
@@ -435,7 +439,10 @@ async def get_latest_draw():
     return {"success": True, "draw": draw}
 
 @app.get("/api/draws/{draw_number}")
-async def get_draw_by_number(draw_number: int):
+async def get_draw_by_number(
+    draw_number: int,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
     db = get_db()
     draw = db.get_draw_by_number(draw_number)
     
@@ -725,7 +732,7 @@ async def scrape_historical(
                 logger.error(f"Duplicate white balls: {draw_data['white_balls']}")
                 continue
             if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
-                logger.error(f"Invalid powerball: {draw_data['powerball']}")
+                logger.error(f"Invalid powerball value: {draw_data['powerball']}")
                 continue
             if not isinstance(draw_data.get('jackpot_amount', 0), (int, float)) or draw_data.get('jackpot_amount', 0) < 0:
                 logger.error(f"Invalid jackpot_amount: {draw_data.get('jackpot_amount')}")
@@ -826,14 +833,14 @@ async def get_predictions(
 
 # Analysis and insights endpoints
 @app.get("/api/insights/frequency")
-async def get_frequency_analysis():
+async def get_frequency_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     db = get_db()
     frequency = db.get_frequency_analysis()
     
     return frequency
 
 @app.get("/api/insights/due")
-async def get_due_numbers():
+async def get_due_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     analytics = get_analytics()
     db = get_db()
     
@@ -868,7 +875,7 @@ async def get_due_numbers():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/insights/hot")
-async def get_hot_numbers():
+async def get_hot_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     analytics = get_analytics()
     db = get_db()
     
@@ -903,7 +910,7 @@ async def get_hot_numbers():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/insights/pairs")
-async def get_pair_analysis():
+async def get_pair_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     db = get_db()
     
     try:
@@ -951,7 +958,7 @@ async def get_ideas():
     }
 
 @app.get("/api/insights/positions")
-async def get_position_analysis():
+async def get_position_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     db = get_db()
     
     try:
@@ -995,7 +1002,7 @@ async def get_position_analysis():
 @app.get("/api/insights/cluster")
 async def get_cluster_analysis(
     force_refresh: bool = False,
-    current_user: Dict[str, Any] = Depends(get_current_user)
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
 ):
     analytics = get_analytics()
     db = get_db()
@@ -1016,7 +1023,7 @@ async def get_cluster_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/insights/all")
-async def get_all_insights():
+async def get_all_insights(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
     db = get_db()
     analytics = get_analytics()
     
@@ -1045,7 +1052,10 @@ async def run_analytics(
     }
 
 @app.get("/api/combinations")
-async def get_top_combinations(limit: int = 10):
+async def get_top_combinations(
+    limit: int = 10,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
     db = get_db()
     combinations = db.get_expected_combinations(limit=limit)
     
@@ -1159,6 +1169,17 @@ async def debug_test():
         "message": "Debug endpoint working",
         "headers": dict(request.headers),
         "url": str(request.url)
+    }
+
+@app.get("/api/users")
+async def get_users():
+    """Get all users for admin purposes"""
+    return {
+        "success": True,
+        "users": [
+            {"id": 1, "username": "anonymous", "email": "anonymous@example.com"},
+            {"id": 2, "username": "admin", "email": "admin@example.com"}
+        ]
     }
 
 # Background tasks

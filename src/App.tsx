@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toast } from './components/Toast';
@@ -11,85 +11,29 @@ import Analysis from './components/Analysis';
 import History from './components/History';
 import Settings from './components/Settings';
 import DrawManagement from './components/DrawManagement';
+import CheckNumbers from './components/CheckNumbers'; // Added import
 import Login from './components/Login';
 import Logo from './components/Logo';
 import { getCurrentUser, isAuthenticated, logout } from './lib/api';
 import { User, LogOut } from 'lucide-react';
 
-// Debug check
 console.log('[App] Starting application...');
 console.log('[App] Current URL:', window.location.href);
 console.log('[App] API_URL from env:', import.meta.env.VITE_API_URL);
 
-// Create a debug component to test imports
-const DebugImports = () => {
-  useEffect(() => {
-    console.log('[DebugImports] Testing imports...');
-    
-    // Test API module
-    try {
-      // Using require instead of ES6 import to see if it makes a difference
-      const api = require('./lib/api');
-      console.log('[DebugImports] API module loaded:', api);
-      console.log('[DebugImports] API functions:', Object.keys(api));
-      
-      // Check if specific functions exist
-      console.log('[DebugImports] getDraws exists:', typeof api.getDraws);
-      console.log('[DebugImports] getPredictions exists:', typeof api.getPredictions);
-      
-      // Try calling a function
-      if (typeof api.getDraws === 'function') {
-        console.log('[DebugImports] Attempting to call getDraws...');
-        api.getDraws(1, 0).then(result => {
-          console.log('[DebugImports] getDraws successful:', result);
-        }).catch(error => {
-          console.error('[DebugImports] getDraws failed:', error);
-        });
-      } else {
-        console.error('[DebugImports] getDraws is not a function');
-      }
-    } catch (error) {
-      console.error('[DebugImports] Failed to load API module:', error);
-    }
-    
-    // Test data utils
-    try {
-      const dataUtils = require('./utils/dataUtils');
-      console.log('[DebugImports] Data utils loaded:', dataUtils);
-      console.log('[DebugImports] Data utils functions:', Object.keys(dataUtils));
-    } catch (error) {
-      console.error('[DebugImports] Failed to load data utils:', error);
-    }
-    
-    // Test direct fetch
-    console.log('[DebugImports] Testing direct fetch...');
-    fetch('/api/health')
-      .then(response => {
-        console.log('[DebugImports] Direct fetch /api/health status:', response.status);
-        return response.json();
-      })
-      .then(data => {
-        console.log('[DebugImports] Direct fetch /api/health data:', data);
-      })
-      .catch(error => {
-        console.error('[DebugImports] Direct fetch failed:', error);
-      });
-      
-    // Test draws endpoint
-    fetch('/api/draws?limit=1')
-      .then(response => {
-        console.log('[DebugImports] Direct fetch /api/draws status:', response.status);
-        return response.json();
-      })
-      .then(data => {
-        console.log('[DebugImports] Direct fetch /api/draws data:', data);
-      })
-      .catch(error => {
-        console.error('[DebugImports] Direct fetch /api/draws failed:', error);
-      });
-  }, []);
-  
-  return null;
+interface UserContextType {
+  user: { id: number; username: string; is_admin: boolean } | null;
+  setUser: React.Dispatch<React.SetStateAction<{ id: number; username: string; is_admin: boolean } | null>>;
+}
+
+const UserContext = createContext<UserContextType | undefined>(undefined);
+
+export const useUser = () => {
+  const context = useContext(UserContext);
+  if (!context) {
+    throw new Error('useUser must be used within a UserProvider');
+  }
+  return context;
 };
 
 const queryClient = new QueryClient({
@@ -101,11 +45,18 @@ const queryClient = new QueryClient({
   },
 });
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function ProtectedRoute({ children, adminOnly }: { children: React.ReactNode; adminOnly?: boolean }) {
   const location = useLocation();
+  const { user } = useUser();
   
   if (!isAuthenticated()) {
+    console.log('[ProtectedRoute] Not authenticated, redirecting to /login');
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+  
+  if (adminOnly && (!user || !user.is_admin)) {
+    console.log('[ProtectedRoute] Not admin, redirecting to /check-numbers');
+    return <Navigate to="/check-numbers" replace />;
   }
   
   return <>{children}</>;
@@ -114,21 +65,56 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function AppContent() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState<{ id: number; username: string } | null>(null);
+  const [user, setUser] = useState<{ id: number; username: string; is_admin: boolean } | null>(null);
 
   useEffect(() => {
     console.log('[AppContent] Location changed:', location.pathname);
     if (isAuthenticated()) {
-      const currentUser = getCurrentUser();
-      console.log('[AppContent] Current user:', currentUser);
-      setUser(currentUser);
+      try {
+        const currentUser = getCurrentUser();
+        console.log('[AppContent] Current user from getCurrentUser:', currentUser);
+        if (currentUser) {
+          fetch('/api/auth/me', {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('token')}`,
+              'Content-Type': 'application/json',
+            },
+          })
+            .then(response => {
+              if (!response.ok) {
+                throw new Error('Failed to fetch user data');
+              }
+              return response.json();
+            })
+            .then(data => {
+              setUser({ id: data.id, username: data.username, is_admin: data.is_admin });
+            })
+            .catch(error => {
+              console.error('[AppContent] Error fetching user data:', error);
+              logout();
+              setUser(null);
+              navigate('/login');
+            });
+        }
+      } catch (error) {
+        console.error('[AppContent] Error getting current user:', error);
+        logout();
+        setUser(null);
+        navigate('/login');
+      }
+    } else {
+      setUser(null);
     }
-  }, [location]);
+  }, [location.pathname, navigate]);
 
-  const handleLogin = (token: string, userId: number, username: string) => {
-    console.log('[AppContent] handleLogin called with:', { token, userId, username });
-    setUser({ id: userId, username });
-    const from = location.state?.from?.pathname || '/';
+  const handleLogin = (token: string, userId: number, username: string, isAdmin: boolean) => {
+    console.log('[AppContent] handleLogin called with:', { token, userId, username, isAdmin });
+    localStorage.setItem('token', token);
+    localStorage.setItem('user_id', userId.toString());
+    localStorage.setItem('username', username);
+    localStorage.setItem('is_admin', isAdmin.toString());
+    setUser({ id: userId, username, is_admin: isAdmin });
+    const from = location.state?.from?.pathname || (isAdmin ? '/' : '/check-numbers');
     console.log('[AppContent] Navigating to:', from);
     navigate(from);
     showToast.success('Logged in successfully');
@@ -163,6 +149,9 @@ function AppContent() {
       case 'settings':
         navigate('/settings');
         break;
+      case 'check-numbers':
+        navigate('/check-numbers');
+        break;
       default:
         navigate('/');
     }
@@ -180,6 +169,8 @@ function AppContent() {
         return 'analysis';
       case '/history':
         return 'history';
+      case '/check-numbers':
+        return 'check-numbers';
       case '/draw-management':
         return 'draw-management';
       case '/settings':
@@ -192,89 +183,85 @@ function AppContent() {
   console.log('[AppContent] Rendering with user:', user);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <DebugImports />
-      {user && (
-        <>
-          <header className="bg-white shadow-sm">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <Logo size={32} />
-                  <h1 className="text-2xl font-bold text-gray-900">Powerball Analyzer</h1>
-                </div>
-                
-                <div className="flex items-center space-x-4">
-                  <div className="flex items-center space-x-2 px-3 py-2">
-                    <User className="h-5 w-5 text-gray-600" />
-                    <span className="text-sm font-medium">{user.username}</span>
+    <UserContext.Provider value={{ user, setUser }}>
+      <div className="min-h-screen bg-gray-50">
+        {user && (
+          <>
+            <header className="bg-white shadow-sm">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-3">
+                    <Logo size={32} />
+                    <h1 className="text-2xl font-bold text-gray-900">Powerball Analyzer</h1>
                   </div>
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center space-x-2 px-3 py-2 rounded-md text-red-600 hover:bg-red-50"
-                    title="Sign out"
-                  >
-                    <LogOut className="h-5 w-5" />
-                  </button>
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center space-x-2 px-3 py-2">
+                      <User className="h-5 w-5 text-gray-600" />
+                      <span className="text-sm font-medium">{user.username}</span>
+                    </div>
+                    <button
+                      onClick={handleLogout}
+                      className="flex items-center space-x-2 px-3 py-2 rounded-md text-red-600 hover:bg-red-50"
+                      title="Sign out"
+                    >
+                      <LogOut className="h-5 w-5" />
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </header>
-
-          <Navigation 
-            activeTab={getActiveTab()} 
-            onTabChange={handleTabChange} 
-            includeDrawManagement={true}
-          />
-        </>
-      )}
-
-      <main className={user ? "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" : ""}>
-        <Routes>
-          <Route path="/login" element={
-            isAuthenticated() ? <Navigate to="/" replace /> : <Login onLogin={handleLogin} />
-          } />
-          
-          <Route path="/" element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/predictions" element={
-            <ProtectedRoute>
-              <Predictions />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/analysis" element={
-            <ProtectedRoute>
-              <Analysis />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/history" element={
-            <ProtectedRoute>
-              <History />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/draw-management" element={
-            <ProtectedRoute>
-              <DrawManagement />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="/settings" element={
-            <ProtectedRoute>
-              <Settings />
-            </ProtectedRoute>
-          } />
-          
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
+            </header>
+            <Navigation 
+              activeTab={getActiveTab()} 
+              onTabChange={handleTabChange} 
+              includeDrawManagement={user.is_admin}
+            />
+          </>
+        )}
+        <main className={user ? "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" : ""}>
+          <Routes>
+            <Route path="/login" element={
+              isAuthenticated() ? <Navigate to="/" replace /> : <Login onLogin={handleLogin} />
+            } />
+            <Route path="/" element={
+              <ProtectedRoute adminOnly>
+                <Dashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="/predictions" element={
+              <ProtectedRoute>
+                <Predictions />
+              </ProtectedRoute>
+            } />
+            <Route path="/analysis" element={
+              <ProtectedRoute>
+                <Analysis />
+              </ProtectedRoute>
+            } />
+            <Route path="/history" element={
+              <ProtectedRoute adminOnly>
+                <History />
+              </ProtectedRoute>
+            } />
+            <Route path="/draw-management" element={
+              <ProtectedRoute adminOnly>
+                <DrawManagement />
+              </ProtectedRoute>
+            } />
+            <Route path="/settings" element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            } />
+            <Route path="/check-numbers" element={
+              <ProtectedRoute>
+                <CheckNumbers />
+              </ProtectedRoute>
+            } />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </UserContext.Provider>
   );
 }
 

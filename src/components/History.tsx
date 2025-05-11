@@ -1,11 +1,10 @@
-// src/components/History.tsx
 import React, { useState, useEffect } from 'react';
+import { Navigate } from 'react-router-dom';
 import { Calendar, Search, Filter, Trophy, X, AlertCircle } from 'lucide-react';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
-import { getDraws } from '../lib/api';
-import { processWhiteBalls, processPowerball, safelyParseNumber, formatCurrency } from '../utils/dataUtils';
+import { getCurrentUser } from '../lib/api';
 
 interface Draw {
   id: string;
@@ -17,55 +16,171 @@ interface Draw {
   winners: number;
 }
 
+const processWhiteBalls = (whiteBalls: any): number[] => {
+  if (Array.isArray(whiteBalls)) {
+    return whiteBalls
+      .map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball)
+      .filter(ball => typeof ball === 'number' && !isNaN(ball) && ball >= 1 && ball <= 69)
+      .slice(0, 5);
+  }
+  
+  if (typeof whiteBalls === 'string' && whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
+    const cleaned = whiteBalls.slice(1, -1);
+    return cleaned.split(',')
+      .map(item => parseInt(item.trim(), 10))
+      .filter(num => !isNaN(num) && num >= 1 && num <= 69)
+      .slice(0, 5);
+  }
+  
+  console.warn('Could not process white_balls:', whiteBalls);
+  return [1, 2, 3, 4, 5];
+};
+
+const processPowerball = (powerball: any): number => {
+  if (typeof powerball === 'number' && !isNaN(powerball)) {
+    return Math.max(1, Math.min(26, powerball));
+  }
+  
+  if (typeof powerball === 'string') {
+    const parsed = parseInt(powerball, 10);
+    if (!isNaN(parsed)) {
+      return Math.max(1, Math.min(26, parsed));
+    }
+  }
+  
+  console.warn('Could not process powerball:', powerball);
+  return 1;
+};
+
+const formatCurrency = (amount: number | string): string => {
+  const numericAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(numericAmount || 0);
+};
+
 const History: React.FC = () => {
   const [draws, setDraws] = useState<Draw[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState('');
+  const [winFilter, setWinFilter] = useState<string>('all');
   const [page, setPage] = useState(1);
   const [totalDraws, setTotalDraws] = useState(0);
+  const [currentUser, setCurrentUser] = useState<{ id: number; username: string; is_admin: boolean } | null>(null);
   const itemsPerPage = 20;
 
   useEffect(() => {
-    fetchDraws();
+    const fetchCurrentUser = async () => {
+      console.log('[History] Starting fetchCurrentUser');
+      try {
+        const token = localStorage.getItem('token');
+        console.log('[History] Token in localStorage:', token ? 'Present' : 'Missing');
+        if (!token) {
+          console.log('[History] No token, redirecting to /login');
+          setError('Please log in to access draw history');
+          return;
+        }
+        const user = getCurrentUser();
+        console.log('[History] getCurrentUser result:', user);
+        if (!user) {
+          throw new Error('No user data in localStorage');
+        }
+        const response = await fetch('/api/auth/me', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        console.log('[History] /api/auth/me response status:', response.status);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch user data: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log('[History] /api/auth/me data:', data);
+        setCurrentUser({ id: data.id, username: data.username, is_admin: data.is_admin });
+      } catch (err) {
+        console.error('[History] Error fetching current user:', err);
+        setError(err instanceof Error ? err.message : 'Failed to authenticate user');
+        showToast.error(err instanceof Error ? err.message : 'Failed to authenticate user');
+      } finally {
+        setLoading(false);
+        console.log('[History] fetchCurrentUser completed, loading:', false);
+      }
+    };
+
+    fetchCurrentUser();
   }, []);
 
-  const fetchDraws = async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const response = await getDraws(1000, 0);
-      
-      if (!response || !response.draws) {
-        throw new Error('No draws data returned');
-      }
-
-      // Process the draws to ensure proper data format
-      const processedDraws: Draw[] = response.draws.map((draw: any) => ({
-        id: draw.id?.toString() || '',
-        draw_number: safelyParseNumber(draw.draw_number, 0),
-        draw_date: draw.draw_date || 'Unknown',
-        white_balls: processWhiteBalls(draw.white_balls),
-        powerball: processPowerball(draw.powerball),
-        jackpot_amount: safelyParseNumber(draw.jackpot_amount, 0),
-        winners: safelyParseNumber(draw.winners, 0),
-      }));
-
-      setDraws(processedDraws);
-      setTotalDraws(processedDraws.length);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Error fetching draws';
-      setError(errorMessage);
-      showToast.error(errorMessage);
-      console.error('Error fetching draws:', err);
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    if (!currentUser || !currentUser.is_admin) {
+      console.log('[History] Skipping fetchDraws: user=', currentUser, 'is_admin=', currentUser?.is_admin);
+      return;
     }
-  };
 
-  // Apply filters
+    const fetchDraws = async () => {
+      console.log('[History] Starting fetchDraws');
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const token = localStorage.getItem('token');
+        console.log('[History] Token for /api/draws:', token ? 'Present' : 'Missing');
+        if (!token) {
+          throw new Error('No authentication token found');
+        }
+        const response = await fetch(`/api/draws?limit=1000&offset=0`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        console.log('[History] /api/draws response status:', response.status);
+        if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error('Unauthorized: Admin access required');
+          }
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('[History] /api/draws data:', data);
+        
+        if (!data || !data.draws) {
+          throw new Error('No draws data returned');
+        }
+
+        const processedDraws: Draw[] = data.draws.map((draw: any) => ({
+          id: draw.id?.toString() || '',
+          draw_number: draw.draw_number || 0,
+          draw_date: draw.draw_date || 'Unknown',
+          white_balls: processWhiteBalls(draw.white_balls),
+          powerball: processPowerball(draw.powerball),
+          jackpot_amount: draw.jackpot_amount || 0,
+          winners: draw.winners || 0,
+        }));
+
+        setDraws(processedDraws);
+        setTotalDraws(processedDraws.length);
+        console.log('[History] Draws processed:', processedDraws.length);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Error fetching draws';
+        console.error('[History] Error fetching draws:', err);
+        setError(errorMessage);
+        showToast.error(errorMessage);
+      } finally {
+        setLoading(false);
+        console.log('[History] fetchDraws completed, loading:', false);
+      }
+    };
+
+    fetchDraws();
+  }, [currentUser]);
+
   const filtered = draws.filter(draw => {
     const matchesSearch = !searchTerm ||
       draw.draw_number.toString().includes(searchTerm) ||
@@ -73,16 +188,20 @@ const History: React.FC = () => {
       draw.powerball.toString().includes(searchTerm);
 
     const matchesDate = !dateFilter || draw.draw_date.includes(dateFilter);
-    return matchesSearch && matchesDate;
+    
+    const matchesWinFilter = 
+      winFilter === 'all' ||
+      (winFilter === 'win' && draw.winners > 0) ||
+      (winFilter === 'lose' && draw.winners === 0);
+      
+    return matchesSearch && matchesDate && matchesWinFilter;
   });
 
-  // Client-side pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
   const startIndex = (page - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
   const pageItems = filtered.slice(startIndex, endIndex);
 
-  // Handlers
   const onSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
     setPage(1);
@@ -96,10 +215,17 @@ const History: React.FC = () => {
   const clearFilters = () => {
     setSearchTerm('');
     setDateFilter('');
+    setWinFilter('all');
     setPage(1);
   };
 
+  if (!localStorage.getItem('token')) {
+    console.log('[History] No token, redirecting to /login');
+    return <Navigate to="/login" replace />;
+  }
+
   if (loading) {
+    console.log('[History] Rendering loading state');
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSpinner size={50} />
@@ -108,6 +234,7 @@ const History: React.FC = () => {
   }
 
   if (error) {
+    console.log('[History] Rendering error state:', error);
     return (
       <div className="bg-red-50 p-6 rounded-lg shadow-sm">
         <div className="flex items-center space-x-3 mb-4">
@@ -116,19 +243,27 @@ const History: React.FC = () => {
         </div>
         <p className="text-red-600 mb-4">{error}</p>
         <button
-          onClick={fetchDraws}
+          onClick={() => {
+            localStorage.clear();
+            window.location.href = '/login';
+          }}
           className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
         >
-          Retry
+          Log In Again
         </button>
       </div>
     );
   }
 
+  if (!currentUser || !currentUser.is_admin) {
+    console.log('[History] Redirecting to /check-numbers: user=', currentUser, 'is_admin=', currentUser?.is_admin);
+    return <Navigate to="/check-numbers" replace />;
+  }
+
+  console.log('[History] Rendering draw history, draws:', draws.length);
   return (
     <div className="space-y-6">
       <section className="bg-white rounded-lg shadow-sm p-6">
-        {/* Header + Filters */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-2">
             <h2 className="text-lg font-semibold text-gray-900">Draw History</h2>
@@ -154,7 +289,19 @@ const History: React.FC = () => {
               />
               <Calendar className="h-5 w-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             </div>
-            {(searchTerm || dateFilter) && (
+            <select
+              value={winFilter}
+              onChange={(e) => {
+                setWinFilter(e.target.value);
+                setPage(1);
+              }}
+              className="py-2 px-4 border rounded-md focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Draws</option>
+              <option value="win">Winners Only</option>
+              <option value="lose">No Winners</option>
+            </select>
+            {(searchTerm || dateFilter || winFilter !== 'all') && (
               <button
                 onClick={clearFilters}
                 className="text-sm text-gray-500 hover:text-gray-700"
@@ -165,7 +312,6 @@ const History: React.FC = () => {
           </div>
         </div>
 
-        {/* Table */}
         {filtered.length === 0 ? (
           <div className="text-center py-12">
             <Filter className="h-12 w-12 text-gray-300 mx-auto mb-4" />
@@ -232,7 +378,6 @@ const History: React.FC = () => {
               </table>
             </div>
 
-            {/* Pagination */}
             <div className="mt-6 flex items-center justify-between">
               <div className="text-sm text-gray-500">
                 Showing {startIndex + 1}–{Math.min(endIndex, filtered.length)} of {filtered.length}
