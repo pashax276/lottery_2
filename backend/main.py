@@ -872,10 +872,9 @@ async def get_predictions(
     db = get_db()
     
     user_id = None
+    # current_user is already the resolved user object, no need to await it
     if current_user:
-        user = await current_user
-        if user:
-            user_id = user.get("id", None)
+        user_id = current_user.get("id", None)
     
     predictions = db.get_predictions(
         method=method,
