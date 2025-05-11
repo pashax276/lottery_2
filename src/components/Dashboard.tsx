@@ -1,3 +1,4 @@
+// src/components/Dashboard.tsx
 import React, { useState, useEffect } from 'react';
 import { ArrowUpRight, TrendingUp, Users, DollarSign, Trophy, RefreshCw, X } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
@@ -136,62 +137,93 @@ const Dashboard = () => {
       console.log('[Dashboard] Starting fetch...');
       try {
         const token = localStorage.getItem('token');
-        const [drawsResponse, statsResponse] = await Promise.all([
-          fetch('/api/draws?limit=10', {
+        
+        // Fetch draws
+        let drawsData: Draw[] = [];
+        try {
+          const drawsResponse = await fetch('/api/draws?limit=10', {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
-          }),
-          fetch('/api/user_stats', {
+          });
+
+          if (!drawsResponse.ok) {
+            if (drawsResponse.status === 401) {
+              throw new Error('Unauthorized: Admin access required');
+            }
+            throw new Error(`Draws HTTP error! status: ${drawsResponse.status}`);
+          }
+
+          const drawsResponseData = await drawsResponse.json();
+          console.log('[Dashboard] Draws Response Data:', drawsResponseData);
+
+          // Handle different response formats
+          if (drawsResponseData && drawsResponseData.draws && Array.isArray(drawsResponseData.draws)) {
+            drawsData = drawsResponseData.draws;
+          } else if (drawsResponseData && Array.isArray(drawsResponseData)) {
+            drawsData = drawsResponseData;
+          } else {
+            console.warn('[Dashboard] Unexpected draws data format:', drawsResponseData);
+            drawsData = [];
+          }
+        } catch (drawsError) {
+          console.error('[Dashboard] Error fetching draws:', drawsError);
+          drawsData = [];
+        }
+
+        // Fetch user stats
+        let statsData: UserStat[] = [];
+        try {
+          const statsResponse = await fetch('/api/user_stats', {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
             },
-          }),
-        ]);
+          });
 
-        if (!drawsResponse.ok) {
-          if (drawsResponse.status === 401) {
-            throw new Error('Unauthorized: Admin access required');
+          if (!statsResponse.ok) {
+            if (statsResponse.status === 401) {
+              throw new Error('Unauthorized: Admin access required');
+            }
+            throw new Error(`Stats HTTP error! status: ${statsResponse.status}`);
           }
-          throw new Error(`Draws HTTP error! status: ${drawsResponse.status}`);
-        }
-        if (!statsResponse.ok) {
-          if (statsResponse.status === 401) {
-            throw new Error('Unauthorized: Admin access required');
+
+          const statsResponseData = await statsResponse.json();
+          console.log('[Dashboard] Stats Response Data:', statsResponseData);
+
+          // Handle different response formats
+          if (statsResponseData && Array.isArray(statsResponseData)) {
+            statsData = statsResponseData;
+          } else if (statsResponseData && statsResponseData.data && Array.isArray(statsResponseData.data)) {
+            statsData = statsResponseData.data;
+          } else {
+            console.warn('[Dashboard] Unexpected stats data format:', statsResponseData);
+            statsData = [];
           }
-          throw new Error(`Stats HTTP error! status: ${statsResponse.status}`);
+        } catch (statsError) {
+          console.error('[Dashboard] Error fetching user stats:', statsError);
+          statsData = [];
         }
-
-        const drawsData = await drawsResponse.json();
-        const statsData = await statsResponse.json();
-
-        console.log('[Dashboard] Draws Data:', drawsData);
-        console.log('[Dashboard] Stats Data:', statsData);
 
         if (isMounted) {
-          if (drawsData && drawsData.draws) {
-            // Process draws with safe functions
-            const processedDraws = drawsData.draws.map((draw: any, index: number) => {
-              // Ensure data has safe defaults and proper types
-              return {
-                id: safeToString(draw?.id || ''),  // Safely convert ID to string
-                draw_number: draw?.draw_number ? Number(draw.draw_number) : 0,
-                draw_date: draw?.draw_date || 'Unknown',
-                white_balls: processWhiteBalls(draw?.white_balls),
-                powerball: processPowerball(draw?.powerball),
-                jackpot_amount: draw?.jackpot_amount ? Number(draw.jackpot_amount) : 0,
-                winners: draw?.winners ? Number(draw.winners) : 0,
-                created_at: draw?.created_at || new Date().toISOString()
-              };
-            });
-            setDraws(processedDraws);
-          }
-          if (statsData) {
-            const safeStats = Array.isArray(statsData) ? statsData : [];
-            setUserStats(safeStats);
-          }
+          // Process draws with safe functions
+          const processedDraws = drawsData.map((draw: any, index: number) => {
+            // Ensure data has safe defaults and proper types
+            return {
+              id: safeToString(draw?.id || `draw-${index}`),
+              draw_number: draw?.draw_number ? Number(draw.draw_number) : 0,
+              draw_date: draw?.draw_date || 'Unknown',
+              white_balls: processWhiteBalls(draw?.white_balls),
+              powerball: processPowerball(draw?.powerball),
+              jackpot_amount: draw?.jackpot_amount ? Number(draw.jackpot_amount) : 0,
+              winners: draw?.winners ? Number(draw.winners) : 0,
+              created_at: draw?.created_at || new Date().toISOString()
+            };
+          });
+
+          setDraws(processedDraws);
+          setUserStats(Array.isArray(statsData) ? statsData : []);
         }
       } catch (err) {
         console.error('[Dashboard] Error:', err);
@@ -208,26 +240,33 @@ const Dashboard = () => {
 
     fetchData();
 
-    const newSocket = io('http://localhost:5001');
-    setSocket(newSocket);
+    try {
+      const newSocket = io(`${window.location.protocol}//${window.location.host}`);
+      setSocket(newSocket);
 
-    newSocket.on('new_check', () => {
-      console.log('[Dashboard] New check received, refreshing stats');
-      fetchUserStats();
-    });
+      newSocket.on('new_check', () => {
+        console.log('[Dashboard] New check received, refreshing stats');
+        fetchUserStats();
+      });
 
-    newSocket.on('connect', () => {
-      console.log('[Dashboard] Connected to WebSocket');
-    });
+      newSocket.on('connect', () => {
+        console.log('[Dashboard] Connected to WebSocket');
+      });
 
-    newSocket.on('disconnect', () => {
-      console.log('[Dashboard] Disconnected from WebSocket');
-    });
+      newSocket.on('disconnect', () => {
+        console.log('[Dashboard] Disconnected from WebSocket');
+      });
 
-    return () => {
-      isMounted = false;
-      newSocket.close();
-    };
+      return () => {
+        isMounted = false;
+        newSocket.close();
+      };
+    } catch (socketError) {
+      console.error('[Dashboard] Socket connection error:', socketError);
+      return () => {
+        isMounted = false;
+      };
+    }
   }, [user]);
 
   const fetchUserStats = async () => {
@@ -240,15 +279,21 @@ const Dashboard = () => {
           'Content-Type': 'application/json',
         },
       });
+      
       if (!response.ok) {
         if (response.status === 401) {
           throw new Error('Unauthorized: Admin access required');
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
       const data = await response.json();
+      
+      // Handle different response formats
       if (Array.isArray(data)) {
         setUserStats(data);
+      } else if (data && Array.isArray(data.data)) {
+        setUserStats(data.data);
       } else {
         console.warn('[Dashboard] Expected array for user stats but got:', data);
         setUserStats([]);
@@ -288,7 +333,7 @@ const Dashboard = () => {
     );
   }
 
-  const latestDraw = draws[0];
+  const latestDraw = draws.length > 0 ? draws[0] : null;
   const totalJackpot = draws.reduce((sum, draw) => sum + (draw.jackpot_amount || 0), 0);
   const averageJackpot = draws.length > 0 ? totalJackpot / draws.length : 0;
   const totalWinners = draws.reduce((sum, draw) => sum + (draw.winners || 0), 0);
@@ -379,7 +424,7 @@ const Dashboard = () => {
               <LoadingSpinner size={20} />
               <span className="text-sm text-gray-500">Loading leaderboard...</span>
             </div>
-          ) : userStats.length === 0 ? (
+          ) : !Array.isArray(userStats) || userStats.length === 0 ? (
             <p className="text-sm text-gray-500">No stats available</p>
           ) : (
             <table className="min-w-full divide-y divide-gray-200">
@@ -445,10 +490,10 @@ const Dashboard = () => {
                 Draw #{latestDraw.draw_number} • {latestDraw.draw_date}
               </p>
               <div className="flex space-x-2">
-                {(latestDraw.white_balls || [1, 2, 3, 4, 5]).map((number, index) => (
+                {latestDraw.white_balls.map((number, index) => (
                   <NumberBall key={index} number={number} />
                 ))}
-                <NumberBall number={latestDraw.powerball || 1} isPowerball />
+                <NumberBall number={latestDraw.powerball} isPowerball />
               </div>
             </div>
             <div className="text-center md:text-right">
@@ -507,10 +552,10 @@ const Dashboard = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex space-x-2">
-                      {(draw.white_balls || [1, 2, 3, 4, 5]).map((number, idx) => (
+                      {draw.white_balls.map((number, idx) => (
                         <NumberBall key={idx} number={number} size={30} />
                       ))}
-                      <NumberBall number={draw.powerball || 1} isPowerball size={30} />
+                      <NumberBall number={draw.powerball} isPowerball size={30} />
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

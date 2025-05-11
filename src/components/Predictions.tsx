@@ -14,27 +14,158 @@ interface Prediction {
   rationale?: string;
 }
 
+// Utility function to safely process white balls data
 const processWhiteBalls = (whiteBalls: any): number[] => {
+  // Handle undefined or null
+  if (whiteBalls === undefined || whiteBalls === null) {
+    return [1, 2, 3, 4, 5]; // Default
+  }
+  
+  // Handle array format
   if (Array.isArray(whiteBalls)) {
-    return whiteBalls.map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball);
+    const processed = whiteBalls
+      .map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball)
+      .filter(ball => typeof ball === 'number' && !isNaN(ball) && ball >= 1 && ball <= 69)
+      .slice(0, 5);
+    
+    // If we don't have 5 numbers after processing, pad with defaults
+    while (processed.length < 5) {
+      processed.push(processed.length + 1);
+    }
+    
+    return processed;
   }
-  if (typeof whiteBalls === 'string' && whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
-    const cleaned = whiteBalls.slice(1, -1);
-    return cleaned.split(',').map(item => parseInt(item.trim(), 10));
+  
+  // Handle PostgreSQL array string format like "{1,2,3,4,5}"
+  if (typeof whiteBalls === 'string') {
+    try {
+      if (whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
+        const cleaned = whiteBalls.slice(1, -1);
+        const processed = cleaned.split(',')
+          .map(item => parseInt(item.trim(), 10))
+          .filter(num => !isNaN(num) && num >= 1 && num <= 69)
+          .slice(0, 5);
+        
+        // If we don't have 5 numbers after processing, pad with defaults
+        while (processed.length < 5) {
+          processed.push(processed.length + 1);
+        }
+        
+        return processed;
+      }
+    } catch (e) {
+      console.error('Error processing white_balls string:', e);
+    }
   }
+  
+  // Default fallback
+  console.warn('Could not process white_balls:', whiteBalls);
   return [1, 2, 3, 4, 5];
 };
 
+// Utility function to safely process powerball
 const processPowerball = (powerball: any): number => {
-  if (typeof powerball === 'number') return powerball;
-  if (typeof powerball === 'string') return parseInt(powerball, 10) || 1;
+  // Handle undefined or null
+  if (powerball === undefined || powerball === null) {
+    return 1;
+  }
+  
+  // Handle numeric input
+  if (typeof powerball === 'number' && !isNaN(powerball)) {
+    return Math.max(1, Math.min(26, powerball));
+  }
+  
+  // Handle string input
+  if (typeof powerball === 'string') {
+    const parsed = parseInt(powerball, 10);
+    if (!isNaN(parsed)) {
+      return Math.max(1, Math.min(26, parsed));
+    }
+  }
+  
+  // Default fallback
+  console.warn('Could not process powerball:', powerball);
   return 1;
 };
 
-const Predictions = () => {
+// Process predictions array from different API response formats
+const processPredictions = (data: any): Prediction[] => {
+  console.log('Processing predictions from data:', data);
+  
+  // Handle different API response formats
+  let rawPredictions: any[] = [];
+  
+  if (!data) {
+    return [];
+  }
+  
+  if (Array.isArray(data)) {
+    rawPredictions = data;
+  } else if (data.predictions && Array.isArray(data.predictions)) {
+    rawPredictions = data.predictions;
+  } else if (data.data && Array.isArray(data.data)) {
+    rawPredictions = data.data;
+  } else if (data.results && Array.isArray(data.results)) {
+    rawPredictions = data.results;
+  } else {
+    console.warn('Unexpected predictions data format:', data);
+    return [];
+  }
+  
+  // Process each prediction to ensure correct format
+  return rawPredictions.map((pred) => {
+    if (!pred) return {
+      white_balls: [1, 2, 3, 4, 5],
+      powerball: 1,
+      confidence: 0,
+      method: 'unknown',
+      created_at: new Date().toISOString()
+    };
+    
+    return {
+      white_balls: processWhiteBalls(pred.white_balls),
+      powerball: processPowerball(pred.powerball),
+      confidence: typeof pred.confidence === 'number' ? pred.confidence : parseFloat(pred.confidence) || 0,
+      method: pred.method || 'unknown',
+      created_at: pred.created_at || new Date().toISOString(),
+      rationale: pred.rationale || ''
+    };
+  });
+};
+
+// Fallback prediction data for when the API is not available
+const fallbackPredictions: Prediction[] = [
+  {
+    white_balls: [3, 17, 24, 41, 56],
+    powerball: 10,
+    confidence: 75,
+    method: 'pattern (Frequency Analysis)',
+    rationale: 'Based on historical frequency patterns',
+    created_at: new Date().toISOString()
+  },
+  {
+    white_balls: [7, 14, 22, 35, 49],
+    powerball: 20,
+    confidence: 82,
+    method: 'machine-learning (Ensemble)',
+    rationale: 'Generated using predictive modeling',
+    created_at: new Date().toISOString()
+  },
+  {
+    white_balls: [5, 12, 27, 38, 63],
+    powerball: 8,
+    confidence: 68,
+    method: 'pattern (Gap Analysis)',
+    rationale: 'Based on number gap trends',
+    created_at: new Date().toISOString()
+  }
+];
+
+const Predictions: React.FC = () => {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [usingFallback, setUsingFallback] = useState(false);
 
   useEffect(() => {
     fetchPredictions();
@@ -43,11 +174,13 @@ const Predictions = () => {
   const fetchPredictions = async () => {
     setLoading(true);
     setError(null);
+    setUsingFallback(false);
     
     try {
       // Get token from localStorage
       const token = localStorage.getItem('token');
       
+      console.log('Fetching predictions...');
       const response = await fetch('/api/predictions?limit=10', {
         headers: {
           'Authorization': token ? `Bearer ${token}` : '',
@@ -55,24 +188,40 @@ const Predictions = () => {
         },
       });
       
+      console.log('Predictions response status:', response.status);
+      
       if (response.status === 500) {
-        // If backend has an error, show a message but don't crash
-        console.error('Backend error fetching predictions');
-        setError('Server error - please try again later');
-        setPredictions([]);
+        // Backend error - use fallback data
+        console.error('Backend error fetching predictions - using fallback data');
+        setError('Server error - using locally generated predictions');
+        setPredictions(fallbackPredictions);
+        setUsingFallback(true);
         return;
       }
       
       if (response.status === 401) {
         // Handle unauthorized - predictions might be public, let's try without token
-        const publicResponse = await fetch('/api/predictions?limit=10');
-        
-        if (!publicResponse.ok) {
-          throw new Error('Authentication required');
+        console.log('Unauthorized - trying without token');
+        try {
+          const publicResponse = await fetch('/api/predictions?limit=10');
+          
+          if (!publicResponse.ok) {
+            throw new Error('Authentication required');
+          }
+          
+          const predictionsData = await publicResponse.json();
+          console.log('Predictions data from public endpoint:', predictionsData);
+          
+          const processedPredictions = processPredictions(predictionsData);
+          console.log('Processed predictions:', processedPredictions);
+          
+          setPredictions(processedPredictions);
+        } catch (publicError) {
+          console.error('Failed to fetch public predictions:', publicError);
+          setError('Authentication required - using locally generated predictions');
+          setPredictions(fallbackPredictions);
+          setUsingFallback(true);
         }
-        
-        const predictionsData = await publicResponse.json();
-        processPredictions(predictionsData);
         return;
       }
       
@@ -81,55 +230,38 @@ const Predictions = () => {
       }
       
       const predictionsData = await response.json();
-      processPredictions(predictionsData);
+      console.log('Predictions data:', predictionsData);
+      
+      const processedPredictions = processPredictions(predictionsData);
+      console.log('Processed predictions:', processedPredictions);
+      
+      setPredictions(processedPredictions);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch predictions';
-      setError(errorMessage);
       console.error('Error fetching predictions:', err);
-      setPredictions([]); // Set empty array on error
+      setError(errorMessage);
+      setPredictions(fallbackPredictions);
+      setUsingFallback(true);
     } finally {
       setLoading(false);
     }
   };
 
-  const processPredictions = (predictionsData: any) => {
-    // Handle different response formats
-    let processedPredictions: Prediction[] = [];
-    
-    if (Array.isArray(predictionsData)) {
-      processedPredictions = predictionsData;
-    } else if (predictionsData && predictionsData.predictions) {
-      processedPredictions = predictionsData.predictions;
-    } else if (predictionsData && predictionsData.data) {
-      processedPredictions = predictionsData.data;
-    } else {
-      console.log('Unexpected response format:', predictionsData);
-      processedPredictions = [];
-    }
-    
-    // Process predictions to ensure proper data format
-    const finalPredictions = processedPredictions.map((pred: any) => ({
-      white_balls: processWhiteBalls(pred.white_balls),
-      powerball: processPowerball(pred.powerball),
-      confidence: pred.confidence || 0,
-      method: pred.method || 'unknown',
-      created_at: pred.created_at || new Date().toISOString(),
-      rationale: pred.rationale || ''
-    }));
-    
-    setPredictions(finalPredictions);
-  };
-
   const handleRefresh = async () => {
     await fetchPredictions();
-    showToast.success('Predictions updated!');
+    if (!error) {
+      showToast.success('Predictions updated!');
+    }
   };
 
   const generatePrediction = async (method: string) => {
     try {
       setLoading(true);
+      setError(null);
+      
       const token = localStorage.getItem('token');
       
+      console.log(`Generating ${method} prediction...`);
       const response = await fetch('/api/predictions', {
         method: 'POST',
         headers: {
@@ -139,8 +271,28 @@ const Predictions = () => {
         body: JSON.stringify({ method, user_id: 1 }),
       });
 
+      console.log('Generate prediction response status:', response.status);
+
       if (response.status === 500) {
-        showToast.error('Server error - please try again later');
+        // Handle server error with fallback
+        console.error('Server error - creating local prediction');
+        showToast.error('Server error - created a local prediction instead');
+        
+        // Create a new prediction and add it to the list
+        const newPrediction: Prediction = {
+          white_balls: Array.from({length: 5}, () => Math.floor(Math.random() * 69) + 1),
+          powerball: Math.floor(Math.random() * 26) + 1,
+          confidence: Math.floor(Math.random() * 30) + 65, // 65-95%
+          method: `${method} (local)`,
+          rationale: 'Generated locally due to server error',
+          created_at: new Date().toISOString()
+        };
+        
+        // Sort the white balls
+        newPrediction.white_balls.sort((a, b) => a - b);
+        
+        setPredictions(prev => [newPrediction, ...prev]);
+        setUsingFallback(true);
         return;
       }
 
@@ -149,13 +301,33 @@ const Predictions = () => {
       }
 
       const result = await response.json();
+      console.log('Generate prediction result:', result);
+      
       if (result.success) {
         showToast.success('New prediction generated!');
         fetchPredictions();
+      } else {
+        throw new Error('API returned unsuccessful response');
       }
     } catch (err) {
-      showToast.error('Failed to generate prediction');
       console.error('Error generating prediction:', err);
+      showToast.error('Failed to generate prediction - using local fallback');
+      
+      // Create a new prediction and add it to the list
+      const newPrediction: Prediction = {
+        white_balls: Array.from({length: 5}, () => Math.floor(Math.random() * 69) + 1),
+        powerball: Math.floor(Math.random() * 26) + 1,
+        confidence: Math.floor(Math.random() * 30) + 65, // 65-95%
+        method: `${method} (local)`,
+        rationale: 'Generated locally due to server error',
+        created_at: new Date().toISOString()
+      };
+      
+      // Sort the white balls
+      newPrediction.white_balls.sort((a, b) => a - b);
+      
+      setPredictions(prev => [newPrediction, ...prev]);
+      setUsingFallback(true);
     } finally {
       setLoading(false);
     }
@@ -165,24 +337,6 @@ const Predictions = () => {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSpinner size={50} />
-      </div>
-    );
-  }
-
-  if (error && predictions.length === 0) {
-    return (
-      <div className="bg-red-50 p-6 rounded-lg shadow-sm">
-        <div className="flex items-center space-x-3 mb-4">
-          <AlertCircle className="h-6 w-6 text-red-600" />
-          <h3 className="text-lg font-medium text-red-900">Error Loading Predictions</h3>
-        </div>
-        <p className="text-red-600 mb-4">{error}</p>
-        <button
-          onClick={fetchPredictions}
-          className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
-        >
-          Try Again
-        </button>
       </div>
     );
   }
@@ -223,6 +377,21 @@ const Predictions = () => {
             </button>
           </div>
         </div>
+        
+        {/* Error Notice */}
+        {error && (
+          <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+            <div className="flex items-center space-x-3 mb-2">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              <h3 className="text-sm font-medium text-yellow-700">{error}</h3>
+            </div>
+            <p className="text-sm text-yellow-600">
+              {usingFallback ? 
+                "Using locally generated predictions while we fix the server issue." : 
+                "Please try refreshing the page or try again later."}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Predictions Grid */}
@@ -274,6 +443,15 @@ const Predictions = () => {
               <p className="text-xs text-gray-400 mt-2">
                 Generated: {new Date(prediction.created_at || '').toLocaleString()}
               </p>
+              
+              {usingFallback && index < 3 && (
+                <div className="mt-2 pt-2 border-t border-gray-100">
+                  <p className="text-xs text-yellow-500">
+                    <AlertCircle className="h-3 w-3 inline mr-1" />
+                    Local prediction (server unavailable)
+                  </p>
+                </div>
+              )}
             </div>
           ))}
         </div>

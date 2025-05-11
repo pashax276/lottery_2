@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Award, Check, X, Plus, Trash2 } from 'lucide-react';
+import { Search, Award, Check, X, Plus, Trash2, Info, PlusCircle } from 'lucide-react';
 import { showToast } from './Toast';
 import NumberBall from './NumberBall';
 import LoadingSpinner from './LoadingSpinner';
 import { useUser } from '../App';
 
 interface Draw {
-  id: number;
+  id: number | string;
   draw_number: number;
   draw_date: string;
   white_balls: number[];
@@ -49,6 +49,139 @@ interface User {
   username: string;
 }
 
+// Safe data processing helpers
+const ensureArray = (data: any, defaultValue: any[] = []): any[] => {
+  if (Array.isArray(data)) {
+    return data;
+  }
+  
+  if (typeof data === 'string' && data.startsWith('{') && data.endsWith('}')) {
+    try {
+      const content = data.slice(1, -1);
+      return content.split(',').map(item => {
+        const num = parseInt(item.trim(), 10);
+        return isNaN(num) ? item.trim() : num;
+      });
+    } catch (e) {
+      console.error('Failed to parse string array:', e);
+    }
+  }
+  
+  return defaultValue;
+};
+
+const processUserStats = (data: any): UserStat[] => {
+  if (!data) return [];
+  
+  // Handle different API response formats
+  let stats: any[] = [];
+  
+  if (Array.isArray(data)) {
+    stats = data;
+  } else if (data.stats && Array.isArray(data.stats)) {
+    stats = data.stats;
+  } else if (data.data && Array.isArray(data.data)) {
+    stats = data.data;
+  } else if (data.results && Array.isArray(data.results)) {
+    stats = data.results;
+  } else {
+    console.warn('Unexpected user stats format:', data);
+    return [];
+  }
+  
+  return stats.map(stat => ({
+    user_id: typeof stat.user_id === 'number' ? stat.user_id : parseInt(stat.user_id, 10) || 0,
+    username: stat.username || 'Anonymous',
+    total_checks: typeof stat.total_checks === 'number' ? stat.total_checks : parseInt(stat.total_checks, 10) || 0,
+    total_matches: typeof stat.total_matches === 'number' ? stat.total_matches : parseInt(stat.total_matches, 10) || 0,
+    total_wins: typeof stat.total_wins === 'number' ? stat.total_wins : parseInt(stat.total_wins, 10) || 0,
+    total_prize: typeof stat.total_prize === 'number' ? stat.total_prize : parseFloat(stat.total_prize) || 0
+  }));
+};
+
+const processUsers = (data: any): User[] => {
+  if (!data) return [];
+  
+  // Handle different API response formats
+  let users: any[] = [];
+  
+  if (Array.isArray(data)) {
+    users = data;
+  } else if (data.users && Array.isArray(data.users)) {
+    users = data.users;
+  } else if (data.data && Array.isArray(data.data)) {
+    users = data.data;
+  } else {
+    console.warn('Unexpected users format:', data);
+    return [];
+  }
+  
+  return users.map(user => ({
+    id: typeof user.id === 'number' ? user.id : parseInt(user.id, 10) || 0,
+    username: user.username || 'Anonymous'
+  }));
+};
+
+const processDraws = (data: any): Draw[] => {
+  if (!data) return [];
+  
+  // Handle different API response formats
+  let draws: any[] = [];
+  
+  if (Array.isArray(data)) {
+    draws = data;
+  } else if (data.draws && Array.isArray(data.draws)) {
+    draws = data.draws;
+  } else if (data.data && Array.isArray(data.data)) {
+    draws = data.data;
+  } else {
+    console.warn('Unexpected draws format:', data);
+    return [];
+  }
+  
+  return draws.map(draw => {
+    let whiteBalls: number[] = [1, 2, 3, 4, 5]; // Default
+    
+    // Process white_balls safely
+    if (draw.white_balls) {
+      if (Array.isArray(draw.white_balls)) {
+        whiteBalls = draw.white_balls
+          .map((ball: any) => typeof ball === 'string' ? parseInt(ball, 10) : ball)
+          .filter((ball: any) => typeof ball === 'number' && !isNaN(ball));
+      } else if (typeof draw.white_balls === 'string') {
+        whiteBalls = ensureArray(draw.white_balls, [1, 2, 3, 4, 5]);
+      }
+    }
+    
+    // Ensure we have exactly 5 white balls
+    while (whiteBalls.length < 5) {
+      whiteBalls.push(whiteBalls.length + 1);
+    }
+    whiteBalls = whiteBalls.slice(0, 5);
+    
+    // Process powerball safely
+    let powerball = 1; // Default
+    if (draw.powerball !== undefined && draw.powerball !== null) {
+      if (typeof draw.powerball === 'number') {
+        powerball = isNaN(draw.powerball) ? 1 : Math.max(1, Math.min(26, draw.powerball));
+      } else if (typeof draw.powerball === 'string') {
+        const parsedPB = parseInt(draw.powerball, 10);
+        powerball = isNaN(parsedPB) ? 1 : Math.max(1, Math.min(26, parsedPB));
+      }
+    }
+    
+    return {
+      id: draw.id || `draw-${draw.draw_number || 0}`,
+      draw_number: typeof draw.draw_number === 'number' ? draw.draw_number : parseInt(draw.draw_number, 10) || 0,
+      draw_date: draw.draw_date || 'Unknown',
+      white_balls: whiteBalls,
+      powerball: powerball,
+      jackpot_amount: typeof draw.jackpot_amount === 'number' ? draw.jackpot_amount : parseFloat(draw.jackpot_amount) || 0,
+      winners: typeof draw.winners === 'number' ? draw.winners : parseInt(draw.winners, 10) || 0
+    };
+  });
+};
+
 const CheckNumbers = () => {
   const [numberSets, setNumberSets] = useState<NumberSet[]>([{ id: Date.now(), numbers: [0, 0, 0, 0, 0, 0] }]);
   const [selectedDraw, setSelectedDraw] = useState<number | null>(null);
@@ -68,22 +201,30 @@ const CheckNumbers = () => {
     const fetchDraws = async () => {
       setLoadingDraws(true);
       try {
+        console.log('[CheckNumbers] Fetching draws...');
         const response = await fetch('/api/draws?limit=100');
+        
         if (!response.ok) {
           if (response.status === 401) {
             throw new Error('Unauthorized: Admin access required');
           }
           throw new Error(`HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
-        if (isMounted && data && data.draws) {
-          setDraws(data.draws);
-          if (data.draws.length > 0) {
-            setSelectedDraw(data.draws[0].draw_number);
+        console.log('[CheckNumbers] Draws data:', data);
+        
+        if (isMounted) {
+          const processedDraws = processDraws(data);
+          console.log('[CheckNumbers] Processed draws:', processedDraws);
+          setDraws(processedDraws);
+          
+          if (processedDraws.length > 0) {
+            setSelectedDraw(processedDraws[0].draw_number);
           }
         }
       } catch (error) {
-        console.error('Error fetching draws:', error);
+        console.error('[CheckNumbers] Error fetching draws:', error);
         showToast.error(error instanceof Error ? error.message : 'Failed to fetch draw history');
       } finally {
         if (isMounted) {
@@ -95,19 +236,26 @@ const CheckNumbers = () => {
     const fetchUserStats = async () => {
       setLoadingStats(true);
       try {
+        console.log('[CheckNumbers] Fetching user stats...');
         const response = await fetch('/api/user_stats');
+        
         if (!response.ok) {
           if (response.status === 401) {
             throw new Error('Unauthorized: Admin access required');
           }
           throw new Error(`HTTP error! status: ${response.status}`);
         }
+        
         const data = await response.json();
+        console.log('[CheckNumbers] User stats data:', data);
+        
         if (isMounted) {
-          setUserStats(data);
+          const processedStats = processUserStats(data);
+          console.log('[CheckNumbers] Processed user stats:', processedStats);
+          setUserStats(processedStats);
         }
       } catch (error) {
-        console.error('Error fetching user stats:', error);
+        console.error('[CheckNumbers] Error fetching user stats:', error);
         showToast.error(error instanceof Error ? error.message : 'Failed to fetch user stats');
       } finally {
         if (isMounted) {
@@ -130,6 +278,7 @@ const CheckNumbers = () => {
 
   const fetchUsers = async () => {
     try {
+      console.log('[CheckNumbers] Fetching users...');
       const token = localStorage.getItem('token');
       const response = await fetch('/api/users', {
         headers: {
@@ -137,16 +286,22 @@ const CheckNumbers = () => {
           'Content-Type': 'application/json',
         },
       });
+      
       if (!response.ok) {
         if (response.status === 401) {
           throw new Error('Unauthorized: Admin access required');
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
       const data = await response.json();
-      setUsers(data.users || []);
+      console.log('[CheckNumbers] Users data:', data);
+      
+      const processedUsers = processUsers(data);
+      console.log('[CheckNumbers] Processed users:', processedUsers);
+      setUsers(processedUsers);
     } catch (error) {
-      console.error('Error fetching users:', error);
+      console.error('[CheckNumbers] Error fetching users:', error);
       showToast.error(error instanceof Error ? error.message : 'Failed to fetch users');
     }
   };
@@ -166,8 +321,10 @@ const CheckNumbers = () => {
       return;
     }
     const index = numberSets.findIndex(set => set.id === id);
-    setNumberSets(numberSets.filter(set => set.id !== id));
-    setCheckResults(checkResults.filter((_, i) => i !== index));
+    if (index !== -1) {
+      setNumberSets(numberSets.filter(set => set.id !== id));
+      setCheckResults(checkResults.filter((_, i) => i !== index));
+    }
   };
 
   const handleNumberChange = (setId: number, index: number, value: string) => {
@@ -236,7 +393,9 @@ const CheckNumbers = () => {
     setCheckResults(numberSets.map(() => null));
 
     try {
+      console.log('[CheckNumbers] Checking numbers...');
       const token = localStorage.getItem('token');
+      
       const response = await fetch('/api/check_numbers', {
         method: 'POST',
         headers: {
@@ -250,6 +409,8 @@ const CheckNumbers = () => {
         }),
       });
 
+      console.log('[CheckNumbers] Check response status:', response.status);
+
       if (!response.ok) {
         if (response.status === 401) {
           throw new Error('Unauthorized: Please log in');
@@ -258,9 +419,14 @@ const CheckNumbers = () => {
       }
 
       const data = await response.json();
+      console.log('[CheckNumbers] Check response data:', data);
+      
       if (data.success && data.results) {
-        setCheckResults(data.results);
-        data.results.forEach((result: CheckResult, index: number) => {
+        // Ensure results is an array
+        const resultsArray = Array.isArray(data.results) ? data.results : [data.results];
+        setCheckResults(resultsArray);
+        
+        resultsArray.forEach((result: CheckResult, index: number) => {
           if (result.matches.is_winner) {
             showToast.success(`Set ${index + 1}: Congratulations! You're a winner!`);
           } else {
@@ -272,14 +438,17 @@ const CheckNumbers = () => {
         throw new Error('Invalid response format');
       }
     } catch (error) {
-      console.error('Error checking numbers:', error);
+      console.error('[CheckNumbers] Error checking numbers:', error);
       showToast.error('Failed to check your numbers, using client-side check');
+      
+      // Fallback to client-side check
       const selectedDrawData = draws.find(d => d.draw_number === selectedDraw);
       if (!selectedDrawData) {
         showToast.error('Draw not found');
         setLoading(false);
         return;
       }
+      
       const newCheckResults: (CheckResult | null)[] = [];
       for (let i = 0; i < numberSets.length; i++) {
         const numbers = numberSets[i].numbers;
@@ -289,6 +458,7 @@ const CheckNumbers = () => {
         const powerballMatch = powerballToCheck === selectedDrawData.powerball;
         let prize = "No Prize";
         let isWinner = false;
+        
         if (powerballMatch && whiteMatches.length === 5) {
           prize = "JACKPOT WINNER!";
           isWinner = true;
@@ -311,6 +481,7 @@ const CheckNumbers = () => {
           prize = "$4";
           isWinner = true;
         }
+        
         const result = {
           user_id: user?.is_admin && selectedUserId ? selectedUserId : (user?.id || 1),
           username: user?.is_admin && selectedUserId ? users.find(u => u.id === selectedUserId)?.username || 'unknown' : (user?.username || 'anonymous'),
@@ -327,13 +498,16 @@ const CheckNumbers = () => {
                    ` - ${prize}`,
           timestamp: new Date().toISOString()
         };
+        
         newCheckResults.push(result);
+        
         if (isWinner) {
           showToast.success(`Set ${i + 1}: Congratulations! You're a winner!`);
         } else {
           showToast.error(`Set ${i + 1}: Sorry, not a winner. Try again!`);
         }
       }
+      
       setCheckResults(newCheckResults);
       fetchUserStats();
     } finally {
@@ -346,6 +520,27 @@ const CheckNumbers = () => {
     setCheckResults([null]);
     setSelectedUserId(null);
   };
+
+  async function fetchUserStats() {
+    setLoadingStats(true);
+    try {
+      console.log('[CheckNumbers] Refreshing user stats...');
+      const response = await fetch('/api/user_stats');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('[CheckNumbers] Refreshed user stats data:', data);
+      
+      const processedStats = processUserStats(data);
+      console.log('[CheckNumbers] Processed refreshed user stats:', processedStats);
+      setUserStats(processedStats);
+    } catch (error) {
+      console.error('[CheckNumbers] Error refreshing user stats:', error);
+    } finally {
+      setLoadingStats(false);
+    }
+  }
 
   return (
     <div className="bg-white rounded-lg shadow-sm p-6">
@@ -373,7 +568,7 @@ const CheckNumbers = () => {
             >
               <option value="">Select a draw</option>
               {draws.map((draw) => (
-                <option key={draw.draw_number} value={draw.draw_number}>
+                <option key={draw.id} value={draw.draw_number}>
                   #{draw.draw_number} - {draw.draw_date}
                 </option>
               ))}
@@ -550,7 +745,7 @@ const CheckNumbers = () => {
               <LoadingSpinner size={20} />
               <span className="text-sm text-gray-500">Loading stats...</span>
             </div>
-          ) : userStats.length === 0 ? (
+          ) : !Array.isArray(userStats) || userStats.length === 0 ? (
             <p className="text-sm text-gray-500">No stats available</p>
           ) : (
             <div className="overflow-x-auto">
@@ -590,7 +785,7 @@ const CheckNumbers = () => {
                         {stat.total_wins}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        ${stat.total_prize.toLocaleString()}
+                        ${(stat.total_prize || 0).toLocaleString()}
                       </td>
                     </tr>
                   ))}
