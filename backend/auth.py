@@ -7,121 +7,203 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
+
+# Import database
 from db import get_db
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("powerball-auth")
 
-SECRET_KEY = os.environ.get("JWT_SECRET", "your-secret-key")
+# Authentication settings
+SECRET_KEY = os.environ.get("SECRET_KEY", "powerball_secret_key_change_in_production")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
+# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
+# OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token")
+
+# Models
 class Token(BaseModel):
     access_token: str
     token_type: str
     user_id: int
     username: str
-    is_admin: bool
+
+class TokenData(BaseModel):
+    username: Optional[str] = None
+    user_id: Optional[int] = None
 
 class UserCreate(BaseModel):
     username: str
-    email: str
+    email: Optional[str] = None
+    password: str
+
+class UserLogin(BaseModel):
+    username: str
     password: str
 
 class User(BaseModel):
     id: int
     username: str
     email: Optional[str] = None
-    is_admin: bool
 
-async def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+# Helper functions
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """Get password hash"""
+    return pwd_context.hash(password)
+
+def create_user(user_data: UserCreate) -> Optional[Dict[str, Any]]:
+    """Create a new user"""
+    db = get_db()
+    
     try:
-        db = get_db()
-        user = db.execute(
-            "SELECT id, username, email, password_hash, is_admin FROM users WHERE username = %s",
-            (username,)
-        )
-        if not user:
-            logger.warning(f"User not found: {username}")
+        # Check if username already exists
+        query = "SELECT * FROM users WHERE username = %s"
+        existing_user = db.execute(query, (user_data.username,))
+        
+        if existing_user:
+            logger.warning(f"Username '{user_data.username}' already exists")
             return None
         
-        user = user[0]
-        if not pwd_context.verify(password, user['password_hash']):
-            logger.warning(f"Password verification failed for user: {username}")
+        # Hash the password
+        hashed_password = get_password_hash(user_data.password)
+        
+        # Insert the user
+        query = """
+        INSERT INTO users (username, email, password_hash)
+        VALUES (%s, %s, %s)
+        RETURNING id, username, email
+        """
+        
+        result = db.execute(query, (
+            user_data.username,
+            user_data.email,
+            hashed_password
+        ))
+        
+        if not result:
             return None
         
-        return {
-            "id": user["id"],
-            "username": user["username"],
-            "email": user["email"],
-            "is_admin": user["is_admin"] if user["is_admin"] is not None else False
-        }
+        # Create user stats
+        db.execute("""
+            INSERT INTO user_stats (user_id)
+            VALUES (%s)
+            ON CONFLICT (user_id) DO NOTHING
+        """, (result[0]['id'],))
+        
+        return result[0]
+    
     except Exception as e:
-        logger.error(f"Error authenticating user {username}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Authentication error: {str(e)}")
+        logger.error(f"Error creating user: {str(e)}")
+        return None
+
+def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Authenticate a user by username and password"""
+    db = get_db()
+    
+    try:
+        # Get user
+        query = "SELECT id, username, email, password_hash FROM users WHERE username = %s"
+        result = db.execute(query, (username,))
+        
+        if not result:
+            return None
+        
+        user = result[0]
+        
+        # Verify password
+        if not verify_password(password, user['password_hash']):
+            return None
+        
+        # Return user without password hash
+        del user['password_hash']
+        return user
+    
+    except Exception as e:
+        logger.error(f"Error authenticating user: {str(e)}")
+        return None
 
 def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    """Create a new access token"""
     to_encode = data.copy()
+    
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    
     return encoded_jwt
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> Dict[str, Any]:
+    """Get the current user from a token"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Convert string token to bytes if necessary
+        if isinstance(token, str):
+            token_bytes = token.encode('utf-8')
+        else:
+            token_bytes = token
+            
+        # Decode token
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        except Exception as e:
+            logger.error(f"JWT decode error: {str(e)}")
+            try:
+                # Try decoding with token as bytes
+                payload = jwt.decode(token_bytes, SECRET_KEY, algorithms=[ALGORITHM])
+            except Exception as e:
+                logger.error(f"JWT decode error with bytes: {str(e)}")
+                raise credentials_exception
+                
         username = payload.get("sub")
         user_id = payload.get("user_id")
-        is_admin = payload.get("is_admin", False)
+        
         if username is None or user_id is None:
-            logger.error("Invalid token: missing username or user_id")
             raise credentials_exception
         
-        db = get_db()
-        user = db.execute(
-            "SELECT id, username, email, is_admin FROM users WHERE id = %s AND username = %s",
-            (user_id, username)
-        )
-        if not user:
-            logger.error(f"User not found: id={user_id}, username={username}")
-            raise credentials_exception
-        
-        user = user[0]
-        return {
-            "id": user["id"],
-            "username": user["username"],
-            "email": user["email"],
-            "is_admin": user["is_admin"] if user["is_admin"] is not None else False
-        }
+        token_data = TokenData(username=username, user_id=user_id)
+    
     except jwt.PyJWTError as e:
         logger.error(f"JWT decode error: {str(e)}")
         raise credentials_exception
+    
+    # Get user from database
+    db = get_db()
+    query = "SELECT id, username, email FROM users WHERE id = %s AND username = %s"
+    result = db.execute(query, (token_data.user_id, token_data.username))
+    
+    if not result:
+        raise credentials_exception
+    
+    return result[0]
 
-async def get_current_admin_user(current_user: Dict[str, Any] = Depends(get_current_user)):
-    if not current_user.get("is_admin", False):
-        logger.warning(f"Non-admin user {current_user['username']} attempted admin access")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admins can access this resource")
-    return current_user
+def init_auth_schema() -> None:
+    """Initialize authentication schema"""
+    # The admin user creation is now handled in db.py
+    logger.info("Authentication schema initialization called")
 
 async def get_optional_user(token: str = Depends(oauth2_scheme)) -> Optional[Dict[str, Any]]:
-    if not token:
-        return None
+    """Get the current user if authenticated, or None"""
     try:
-        return await get_current_user(token)
+        if token:
+            return await get_current_user(token)
+        return None
     except HTTPException:
         return None
-
-def init_auth_schema():
-    db = get_db()
-    db._ensure_users()
