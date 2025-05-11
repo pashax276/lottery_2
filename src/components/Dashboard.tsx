@@ -7,8 +7,96 @@ import LoadingSpinner from './LoadingSpinner';
 import { showToast } from './Toast';
 import { useUser } from '../App';
 
+// Safe toString helper function
+const safeToString = (value: any): string => {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value);
+};
+
+// Safe key generation for lists
+const safeKey = (item: any, keyProp: string = 'id', index: number = 0): string => {
+  if (item === undefined || item === null) {
+    return `item-${index}`;
+  }
+  
+  if (typeof item === 'object' && keyProp in item && item[keyProp] !== undefined && item[keyProp] !== null) {
+    return safeToString(item[keyProp]);
+  }
+  
+  return `item-${index}`;
+};
+
+// Process white balls safely
+const processWhiteBalls = (whiteBalls: any): number[] => {
+  if (whiteBalls === undefined || whiteBalls === null) {
+    return [1, 2, 3, 4, 5];
+  }
+  
+  // Handle array input
+  if (Array.isArray(whiteBalls)) {
+    const processed = whiteBalls
+      .map(ball => typeof ball === 'string' ? parseInt(ball, 10) : ball)
+      .filter(ball => typeof ball === 'number' && !isNaN(ball) && ball >= 1 && ball <= 69)
+      .slice(0, 5);
+    
+    // If we don't have 5 numbers after processing, pad with defaults
+    while (processed.length < 5) {
+      processed.push(processed.length + 1);
+    }
+    
+    return processed;
+  }
+  
+  // Handle PostgreSQL array string format
+  if (typeof whiteBalls === 'string') {
+    try {
+      if (whiteBalls.startsWith('{') && whiteBalls.endsWith('}')) {
+        const cleaned = whiteBalls.slice(1, -1);
+        const processed = cleaned.split(',')
+          .map(item => parseInt(item.trim(), 10))
+          .filter(num => !isNaN(num) && num >= 1 && num <= 69)
+          .slice(0, 5);
+        
+        // Pad if needed
+        while (processed.length < 5) {
+          processed.push(processed.length + 1);
+        }
+        
+        return processed;
+      }
+    } catch (e) {
+      console.error('Error processing white_balls string:', e);
+    }
+  }
+  
+  // Default fallback
+  return [1, 2, 3, 4, 5];
+};
+
+// Process powerball safely
+const processPowerball = (powerball: any): number => {
+  if (powerball === undefined || powerball === null) {
+    return 1;
+  }
+  
+  if (typeof powerball === 'number' && !isNaN(powerball)) {
+    return Math.max(1, Math.min(26, powerball));
+  }
+  
+  if (typeof powerball === 'string') {
+    const parsed = parseInt(powerball, 10);
+    if (!isNaN(parsed)) {
+      return Math.max(1, Math.min(26, parsed));
+    }
+  }
+  
+  return 1;
+};
+
 interface Draw {
-  id: number;
+  id: string | number;
   draw_number: number;
   draw_date: string;
   white_balls: number[];
@@ -84,10 +172,25 @@ const Dashboard = () => {
 
         if (isMounted) {
           if (drawsData && drawsData.draws) {
-            setDraws(drawsData.draws);
+            // Process draws with safe functions
+            const processedDraws = drawsData.draws.map((draw: any, index: number) => {
+              // Ensure data has safe defaults and proper types
+              return {
+                id: safeToString(draw?.id || ''),  // Safely convert ID to string
+                draw_number: draw?.draw_number ? Number(draw.draw_number) : 0,
+                draw_date: draw?.draw_date || 'Unknown',
+                white_balls: processWhiteBalls(draw?.white_balls),
+                powerball: processPowerball(draw?.powerball),
+                jackpot_amount: draw?.jackpot_amount ? Number(draw.jackpot_amount) : 0,
+                winners: draw?.winners ? Number(draw.winners) : 0,
+                created_at: draw?.created_at || new Date().toISOString()
+              };
+            });
+            setDraws(processedDraws);
           }
           if (statsData) {
-            setUserStats(statsData);
+            const safeStats = Array.isArray(statsData) ? statsData : [];
+            setUserStats(safeStats);
           }
         }
       } catch (err) {
@@ -144,7 +247,12 @@ const Dashboard = () => {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
-      setUserStats(data);
+      if (Array.isArray(data)) {
+        setUserStats(data);
+      } else {
+        console.warn('[Dashboard] Expected array for user stats but got:', data);
+        setUserStats([]);
+      }
     } catch (error) {
       console.error('Error fetching user stats:', error);
       showToast.error(error instanceof Error ? error.message : 'Failed to fetch user stats');
@@ -181,9 +289,9 @@ const Dashboard = () => {
   }
 
   const latestDraw = draws[0];
-  const totalJackpot = draws.reduce((sum, draw) => sum + draw.jackpot_amount, 0);
+  const totalJackpot = draws.reduce((sum, draw) => sum + (draw.jackpot_amount || 0), 0);
   const averageJackpot = draws.length > 0 ? totalJackpot / draws.length : 0;
-  const totalWinners = draws.reduce((sum, draw) => sum + draw.winners, 0);
+  const totalWinners = draws.reduce((sum, draw) => sum + (draw.winners || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -209,7 +317,7 @@ const Dashboard = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Current Jackpot</p>
               <p className="text-2xl font-semibold text-gray-900">
-                ${latestDraw?.jackpot_amount?.toLocaleString() || '0'}
+                ${safeToString((latestDraw?.jackpot_amount || 0).toLocaleString())}
               </p>
             </div>
             <div className="p-3 bg-green-100 rounded-full">
@@ -239,7 +347,7 @@ const Dashboard = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Average Jackpot</p>
               <p className="text-2xl font-semibold text-gray-900">
-                ${averageJackpot.toLocaleString()}
+                ${safeToString(averageJackpot.toLocaleString())}
               </p>
             </div>
             <div className="p-3 bg-purple-100 rounded-full">
@@ -299,7 +407,7 @@ const Dashboard = () => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {userStats.map((stat, index) => (
-                  <tr key={stat.user_id}>
+                  <tr key={safeKey(stat, 'user_id', index)}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {index + 1}
                       {index === 0 && <span className="ml-2 text-yellow-600">🥇</span>}
@@ -307,19 +415,19 @@ const Dashboard = () => {
                       {index === 2 && <span className="ml-2 text-yellow-700">🥉</span>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {stat.username}
+                      {stat.username || 'Anonymous'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.total_checks}
+                      {stat.total_checks || 0}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.total_matches}
+                      {stat.total_matches || 0}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {stat.total_wins}
+                      {stat.total_wins || 0}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      ${stat.total_prize.toLocaleString()}
+                      ${safeToString((stat.total_prize || 0).toLocaleString())}
                     </td>
                   </tr>
                 ))}
@@ -337,16 +445,16 @@ const Dashboard = () => {
                 Draw #{latestDraw.draw_number} • {latestDraw.draw_date}
               </p>
               <div className="flex space-x-2">
-                {latestDraw.white_balls.map((number, index) => (
+                {(latestDraw.white_balls || [1, 2, 3, 4, 5]).map((number, index) => (
                   <NumberBall key={index} number={number} />
                 ))}
-                <NumberBall number={latestDraw.powerball} isPowerball />
+                <NumberBall number={latestDraw.powerball || 1} isPowerball />
               </div>
             </div>
             <div className="text-center md:text-right">
               <p className="text-sm text-gray-600">Jackpot</p>
               <p className="text-2xl font-bold text-gray-900">
-                ${latestDraw.jackpot_amount.toLocaleString()}
+                ${safeToString((latestDraw.jackpot_amount || 0).toLocaleString())}
               </p>
               <p className="text-sm text-gray-600 mt-1">
                 {latestDraw.winners > 0 ? (
@@ -389,8 +497,8 @@ const Dashboard = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {draws.slice(1).map((draw) => (
-                <tr key={draw.id}>
+              {draws.slice(1).map((draw, index) => (
+                <tr key={safeKey(draw, 'id', index + 1)}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     #{draw.draw_number}
                   </td>
@@ -399,14 +507,14 @@ const Dashboard = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex space-x-2">
-                      {draw.white_balls.map((number, index) => (
-                        <NumberBall key={index} number={number} size={30} />
+                      {(draw.white_balls || [1, 2, 3, 4, 5]).map((number, idx) => (
+                        <NumberBall key={idx} number={number} size={30} />
                       ))}
-                      <NumberBall number={draw.powerball} isPowerball size={30} />
+                      <NumberBall number={draw.powerball || 1} isPowerball size={30} />
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${draw.jackpot_amount.toLocaleString()}
+                    ${safeToString((draw.jackpot_amount || 0).toLocaleString())}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     {draw.winners > 0 ? (

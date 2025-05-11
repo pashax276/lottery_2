@@ -376,6 +376,11 @@ async def get_draws(
     # Log raw draws for debugging
     logger.debug(f"Raw draws from database: {draws}")
     
+    # Verify draws are present
+    if not draws:
+        logger.warning("No draws found in database")
+        return {"success": True, "draws": [], "count": 0}
+    
     # Check for missing columns
     if draws and ('white_balls' not in draws[0] or 'powerball' not in draws[0]):
         logger.error("Database schema missing white_balls or powerball columns")
@@ -383,21 +388,56 @@ async def get_draws(
     
     # Process draws, optionally skipping fallbacks in debug mode
     for draw in draws:
-        if draw['white_balls'] is None:
-            logger.warning(f"Missing white_balls for draw {draw['draw_number']}")
-            if not DEBUG_NO_FALLBACK:
-                draw['white_balls'] = [1, 2, 3, 4, 5]
+        # Ensure ID is serializable
+        if 'id' in draw:
+            try:
+                # Make sure ID is converted to string if it's a UUID or other non-JSON-serializable type
+                draw['id'] = str(draw['id'])
+            except Exception as e:
+                logger.error(f"Error converting ID to string: {e}")
+                draw['id'] = ""
+                
+        # Handle white_balls
+        if 'white_balls' not in draw or draw['white_balls'] is None:
+            logger.warning(f"Missing white_balls for draw {draw.get('draw_number', 'unknown')}")
+            draw['white_balls'] = [1, 2, 3, 4, 5]
         elif isinstance(draw['white_balls'], str):
             try:
                 draw['white_balls'] = [int(x) for x in draw['white_balls'].strip("{}").split(",")]
             except Exception as e:
-                logger.error(f"Failed to parse white_balls for draw {draw['draw_number']}: {draw['white_balls']}")
-                if not DEBUG_NO_FALLBACK:
-                    draw['white_balls'] = [1, 2, 3, 4, 5]
-        if draw['powerball'] is None:
-            logger.warning(f"Missing powerball for draw {draw['draw_number']}")
-            if not DEBUG_NO_FALLBACK:
+                logger.error(f"Failed to parse white_balls for draw {draw.get('draw_number', 'unknown')}: {draw['white_balls']}, error: {e}")
+                draw['white_balls'] = [1, 2, 3, 4, 5]
+                
+        # Handle powerball
+        if 'powerball' not in draw or draw['powerball'] is None:
+            logger.warning(f"Missing powerball for draw {draw.get('draw_number', 'unknown')}")
+            draw['powerball'] = 1
+        elif not isinstance(draw['powerball'], (int, float)):
+            try:
+                draw['powerball'] = int(draw['powerball'])
+            except (ValueError, TypeError):
+                logger.error(f"Failed to convert powerball to integer: {draw.get('powerball')}")
                 draw['powerball'] = 1
+                
+        # Ensure jackpot_amount is a number
+        if 'jackpot_amount' not in draw or draw['jackpot_amount'] is None:
+            draw['jackpot_amount'] = 0
+        elif not isinstance(draw['jackpot_amount'], (int, float)):
+            try:
+                draw['jackpot_amount'] = float(draw['jackpot_amount'])
+            except (ValueError, TypeError):
+                logger.error(f"Failed to convert jackpot_amount to number: {draw.get('jackpot_amount')}")
+                draw['jackpot_amount'] = 0
+                
+        # Ensure winners is a number
+        if 'winners' not in draw or draw['winners'] is None:
+            draw['winners'] = 0
+        elif not isinstance(draw['winners'], (int, float)):
+            try:
+                draw['winners'] = int(draw['winners'])
+            except (ValueError, TypeError):
+                logger.error(f"Failed to convert winners to integer: {draw.get('winners')}")
+                draw['winners'] = 0
     
     logger.info(f"Returning {len(draws)} draws for /api/draws with limit={limit}, offset={offset}")
     return {"success": True, "draws": draws, "count": len(draws)}
