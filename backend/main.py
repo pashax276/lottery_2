@@ -233,12 +233,22 @@ socket_app = ASGIApp(sio)
 app.mount("/socket.io", socket_app)
 app.mount("/figures", StaticFiles(directory="data/figures"), name="figures")
 
+# Also add this to the Request middleware to log auth headers
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
     
     # Log request details
     logger.info(f"Request started: {request.method} {request.url.path}")
+    
+    # Log auth header specifically for debugging
+    auth_header = request.headers.get("authorization")
+    if auth_header:
+        # Mask the token for security
+        masked_auth = f"{auth_header[:15]}..." if len(auth_header) > 15 else auth_header
+        logger.debug(f"Authorization header present: {masked_auth}")
+    else:
+        logger.debug("No Authorization header present")
     
     if request.headers:
         logger.debug(f"Headers: {dict(request.headers)}")
@@ -269,16 +279,21 @@ async def log_requests(request: Request, call_next):
     
     return response
 
-# Configure CORS with logging
-logger.info("Configuring CORS middleware")
+# Get CORS origins from environment or use default
+cors_origins_str = os.environ.get("CORS_ORIGINS", "*")
+cors_origins = [origin.strip() for origin in cors_origins_str.split(",")] if cors_origins_str != "*" else ["*"]
+
+logger.info(f"Configuring CORS middleware with origins: {cors_origins}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=1800,  # 30 minutes
 )
-logger.info("CORS configured to allow all origins")
+logger.info(f"CORS configured with origins: {cors_origins}")
 
 # OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token", auto_error=False)

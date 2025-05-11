@@ -1,4 +1,3 @@
-# Dockerfile.frontend
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app
@@ -14,12 +13,32 @@ RUN npx update-browserslist-db@latest
 # Copy source files
 COPY . .
 
-# Debug: Verify NumberBall.tsx and useLocalStorage.ts exist
-RUN ls -la src/components/ && ls -la src/hooks/
+# Make sure utils directory exists
+RUN mkdir -p src/utils
+
+# Create the authFetch utility if it doesn't exist
+RUN if [ ! -f src/utils/authFetch.ts ]; then \
+    echo '// src/utils/authFetch.ts\n/**\n * This is a utility function to make authenticated API requests\n * It handles token retrieval and proper formatting of the Authorization header\n */\n\nexport async function authFetch(\n  url: string,\n  options: RequestInit = {}\n): Promise<Response> {\n  // Get the token from localStorage\n  const token = localStorage.getItem(\"token\");\n  \n  // Create headers with authorization if token exists\n  const headers = new Headers(options.headers || {});\n  \n  // Set content type if not already set\n  if (!headers.has(\"Content-Type\")) {\n    headers.set(\"Content-Type\", \"application/json\");\n  }\n  \n  // Set Authorization header if token exists\n  if (token) {\n    headers.set(\"Authorization\", `Bearer ${token}`);\n  }\n  \n  // Log the request for debugging\n  console.log(`[AuthFetch] ${options.method || \"GET\"} ${url}`, {\n    hasToken: !!token,\n    headers: Object.fromEntries(headers.entries())\n  });\n  \n  // Make the request with the updated headers\n  const response = await fetch(url, {\n    ...options,\n    headers\n  });\n  \n  // Log the response status\n  console.log(`[AuthFetch] Response: ${response.status} ${response.statusText}`);\n  \n  // Handle 401 Unauthorized - you might want to redirect to login or refresh the token\n  if (response.status === 401) {\n    console.warn(\"[AuthFetch] Unauthorized: Token may be invalid or expired\");\n  }\n  \n  return response;\n}' > src/utils/authFetch.ts; \
+    fi
+
+# Create the authDebugger utility if it doesn't exist
+RUN if [ ! -f src/utils/authDebugger.ts ]; then \
+    echo '// src/utils/authDebugger.ts\n/**\n * Utility to debug authentication issues\n * Add this file to your project and call debugAuth() from the browser console\n */\n\nexport function debugAuth() {\n  // Check for token in localStorage\n  const token = localStorage.getItem(\"token\");\n  const userId = localStorage.getItem(\"user_id\");\n  const username = localStorage.getItem(\"username\");\n  const isAdmin = localStorage.getItem(\"is_admin\");\n  \n  console.group(\"🔐 Auth Debugging Info\");\n  console.log(\"Token exists:\", !!token);\n  if (token) {\n    console.log(\"Token length:\", token.length);\n    console.log(\"Token preview:\", `${token.substring(0, 15)}...`);\n    \n    // Try to parse the token (it\"s a JWT)\n    try {\n      const parts = token.split(\".\");\n      if (parts.length === 3) {\n        // Decode the payload (middle part)\n        const payload = JSON.parse(atob(parts[1]));\n        console.log(\"Token payload:\", payload);\n        \n        // Check if token is expired\n        if (payload.exp) {\n          const expDate = new Date(payload.exp * 1000);\n          const now = new Date();\n          console.log(\"Token expires:\", expDate.toLocaleString());\n          console.log(\"Current time:\", now.toLocaleString());\n          console.log(\"Token expired:\", expDate < now ? \"YES ⚠️\" : \"No ✅\");\n        }\n      }\n    } catch (e) {\n      console.error(\"Error parsing token:\", e);\n    }\n  }\n  \n  console.log(\"User ID:\", userId);\n  console.log(\"Username:\", username);\n  console.log(\"Is Admin:\", isAdmin);\n  \n  // Test a fetch request with the token\n  console.log(\"Testing API request with token...\");\n  fetch(\"/api/health\", {\n    headers: {\n      \"Authorization\": token ? `Bearer ${token}` : \"\",\n    }\n  }).then(async response => {\n    console.log(\"API Health Response Status:\", response.status);\n    try {\n      const data = await response.json();\n      console.log(\"API Health Response Data:\", data);\n    } catch (e) {\n      console.error(\"Error parsing response:\", e);\n    }\n  }).catch(error => {\n    console.error(\"API request failed:\", error);\n  });\n  \n  // Check for common issues\n  const issues = [];\n  if (!token) issues.push(\"No token in localStorage\");\n  if (token === \"undefined\") issues.push(\"Token is string \"undefined\"\");\n  if (token === \"null\") issues.push(\"Token is string \"null\"\");\n  if (token && token.length < 10) issues.push(\"Token is too short\");\n  if (!userId) issues.push(\"No user_id in localStorage\");\n  if (!username) issues.push(\"No username in localStorage\");\n  \n  if (issues.length > 0) {\n    console.log(\"⚠️ Potential issues detected:\");\n    issues.forEach(issue => console.log(`- ${issue}`));\n  } else {\n    console.log(\"✅ No common issues detected in auth storage\");\n  }\n  \n  console.groupEnd();\n  \n  return {\n    token,\n    userId,\n    username,\n    isAdmin,\n    issues\n  };\n}\n\n// Add to window object for console access\nif (typeof window !== \"undefined\") {\n  (window as any).debugAuth = debugAuth;\n}' > src/utils/authDebugger.ts; \
+    fi
+
+# Update App.tsx to use authFetch
+RUN grep -q "import { authFetch } from './utils/authFetch';" src/App.tsx || \
+    sed -i '1s/^/import { authFetch } from ".\/utils\/authFetch";\nimport { debugAuth } from ".\/utils\/authDebugger";\n\n/' src/App.tsx
 
 # Set environment variables for build
-ARG VITE_API_URL=http://backend:5001
+ARG VITE_API_URL
 ENV VITE_API_URL=${VITE_API_URL}
+
+# Display env vars for debugging
+RUN echo "VITE_API_URL=${VITE_API_URL}"
+
+# Create a .env file
+RUN echo "VITE_API_URL=${VITE_API_URL}" > .env.production
 
 # Build the application
 RUN npm run build
