@@ -18,20 +18,25 @@ debugLog('Init', 'Environment variables:', import.meta.env);
 const getAuthToken = (): string | null => {
   const token = localStorage.getItem('token');
   debugLog('Auth', 'Retrieved token:', token ? 'Token exists' : 'No token');
-  return token;
+  
+  // Only return the token if it's a non-empty string
+  return token && token.trim() !== '' ? token : null;
 };
 
 // Helper to get headers with auth token if available
 const getHeaders = (includeAuth: boolean = true): HeadersInit => {
   debugLog('Headers', `Creating headers (includeAuth: ${includeAuth})`);
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
+  
   if (includeAuth) {
     const token = getAuthToken();
     if (token) {
+      // This is the critical line - the format must be exactly "Bearer " with a space
       headers['Authorization'] = `Bearer ${token}`;
       debugLog('Headers', 'Added auth token to headers');
     }
   }
+  
   debugLog('Headers', 'Final headers:', headers);
   return headers;
 };

@@ -5,10 +5,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        - VITE_API_URL=http://backend:5001  # This sets the env var during build
     ports:
       - "80:80"
     environment:
       - NODE_ENV=production
+      - VITE_API_URL=http://backend:5001  # This sets the runtime env var
     depends_on:
       - backend
     networks:
@@ -32,6 +35,7 @@ services:
       - ADMIN_PASSWORD=powerball_admin
       - ADMIN_EMAIL=admin@example.com
       - ENABLE_SCHEDULER=true
+      - CORS_ORIGINS=http://localhost,http://frontend,http://127.0.0.1
     depends_on:
       db:
         condition: service_healthy

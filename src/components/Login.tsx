@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Lock, User } from 'lucide-react';
 import { showToast } from './Toast';
 
+// Use relative URL for API requests - DON'T use VITE_API_URL
 const API_URL = '';
 
 interface LoginProps {
@@ -23,12 +24,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
     console.log('Login form submitted');
     console.log('Username:', username);
-    console.log('API URL:', API_URL);
+    console.log('Using relative API URLs');
 
     try {
       if (isRegister) {
         console.log('Attempting registration...');
-        const registerResponse = await fetch(`${API_URL}/api/auth/register`, {
+        const registerUrl = `${API_URL}/api/auth/register`;
+        console.log('Register URL:', registerUrl);
+        
+        const registerResponse = await fetch(registerUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -43,20 +47,28 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         console.log('Register response status:', registerResponse.status);
 
         if (!registerResponse.ok) {
-          const errorData = await registerResponse.text();
-          console.error('Registration failed:', errorData);
-          throw new Error(errorData || 'Registration failed');
+          let errorMsg = 'Registration failed';
+          try {
+            const errorData = await registerResponse.text();
+            console.error('Registration failed:', errorData);
+            errorMsg = errorData || errorMsg;
+          } catch (parseError) {
+            console.error('Error parsing registration error:', parseError);
+          }
+          throw new Error(errorMsg);
         }
 
         setIsRegister(false);
         setLoading(false);
+        setEmail('');
         setError('Registration successful! Please log in.');
         showToast.success('Registration successful! Please log in.');
         return;
       }
 
       console.log('Attempting login...');
-      console.log('Login URL:', `${API_URL}/api/auth/token`);
+      const loginUrl = `${API_URL}/api/auth/token`;
+      console.log('Login URL:', loginUrl);
 
       const formData = new URLSearchParams();
       formData.append('username', username);
@@ -64,39 +76,72 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
       console.log('Form data:', formData.toString());
 
-      const response = await fetch(`${API_URL}/api/auth/token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: formData,
-      });
+      // Log details about the request
+      console.log('Making login request to:', window.location.origin + loginUrl);
+      
+      try {
+        const response = await fetch(loginUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: formData,
+        });
 
-      console.log('Login response status:', response.status);
-      console.log('Login response headers:', Object.fromEntries(response.headers.entries()));
+        console.log('Login response status:', response.status);
+        console.log('Login response headers:', Object.fromEntries(response.headers.entries()));
 
-      if (!response.ok) {
-        const errorData = await response.text();
-        console.error('Login failed:', errorData);
-        throw new Error(errorData || 'Login failed');
+        if (!response.ok) {
+          let errorMsg = 'Login failed';
+          try {
+            const errorText = await response.text();
+            console.error('Login failed response body:', errorText);
+            errorMsg = errorText || errorMsg;
+          } catch (textError) {
+            console.error('Error reading error response text:', textError);
+          }
+          throw new Error(errorMsg);
+        }
+
+        let data;
+        try {
+          data = await response.json();
+          console.log('Login successful, response data:', data);
+        } catch (jsonError) {
+          console.error('Error parsing JSON response:', jsonError);
+          throw new Error('Invalid response format from server');
+        }
+
+        // Basic validation of response data
+        if (!data || !data.access_token) {
+          console.error('Invalid login response - missing token:', data);
+          throw new Error('Invalid login response - missing token');
+        }
+
+        // Store in localStorage with proper type checking
+        localStorage.setItem('token', data.access_token || '');
+        localStorage.setItem('user_id', data.user_id?.toString() || '0');
+        localStorage.setItem('username', data.username || 'anonymous');
+        localStorage.setItem('is_admin', (!!data.is_admin).toString());
+
+        console.log('Saved to localStorage:', {
+          token: localStorage.getItem('token'),
+          user_id: localStorage.getItem('user_id'),
+          username: localStorage.getItem('username'),
+          is_admin: localStorage.getItem('is_admin'),
+        });
+
+        // Call onLogin with proper type conversion
+        onLogin(
+          data.access_token || '', 
+          typeof data.user_id === 'number' ? data.user_id : parseInt(data.user_id, 10) || 0, 
+          data.username || 'anonymous', 
+          !!data.is_admin
+        );
+      } catch (fetchError) {
+        console.error('Network error during login fetch:', fetchError);
+        throw new Error(`Network error: ${fetchError.message || 'Failed to connect to server'}`);
       }
-
-      const data = await response.json();
-      console.log('Login successful, response data:', data);
-
-      localStorage.setItem('token', data.access_token);
-      localStorage.setItem('user_id', data.user_id.toString());
-      localStorage.setItem('username', data.username);
-      localStorage.setItem('is_admin', data.is_admin.toString());
-
-      console.log('Saved to localStorage:', {
-        token: localStorage.getItem('token'),
-        user_id: localStorage.getItem('user_id'),
-        username: localStorage.getItem('username'),
-        is_admin: localStorage.getItem('is_admin'),
-      });
-
-      onLogin(data.access_token, data.user_id, data.username, data.is_admin);
     } catch (err) {
       console.error('Login error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -222,6 +267,44 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             </button>
           </div>
         </form>
+        
+        {/* Add a debug section */}
+        <div className="mt-8 pt-6 border-t border-gray-200">
+          <h3 className="text-sm font-medium text-gray-500">Debug Info</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            App URL: {window.location.href}<br />
+            API URL: {`${window.location.origin}/api`}<br />
+            Using API URL: {API_URL ? API_URL : 'Relative URL'}<br />
+          </p>
+          <button 
+            onClick={() => {
+              console.log('localStorage:', {
+                token: localStorage.getItem('token'),
+                user_id: localStorage.getItem('user_id'),
+                username: localStorage.getItem('username'),
+                is_admin: localStorage.getItem('is_admin'),
+              });
+              
+              // Test the API health
+              fetch('/api/health')
+                .then(response => {
+                  console.log('API Health Status:', response.status);
+                  return response.json();
+                })
+                .then(data => {
+                  console.log('API Health Data:', data);
+                  showToast.success(`API Health: ${data.status}`);
+                })
+                .catch(error => {
+                  console.error('API Health Error:', error);
+                  showToast.error(`API Health Error: ${error.message}`);
+                });
+            }}
+            className="mt-2 text-xs text-blue-600 hover:text-blue-800"
+          >
+            Test API & Check Console
+          </button>
+        </div>
       </div>
     </div>
   );
