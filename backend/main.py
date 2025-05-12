@@ -65,17 +65,18 @@ class Draw(BaseModel):
 class NumberCheck(BaseModel):
     user_id: Optional[int] = 1
     draw_number: int
-    numbers: List[int]
+    numbers: List[List[int]]
     
     @field_validator('numbers')
     @classmethod
     def validate_numbers(cls, v):
-        if len(v) != 6:
-            raise ValueError('Must provide exactly 6 numbers (5 white balls + 1 powerball)')
-        if not all(1 <= x <= 69 for x in v[:5]):
-            raise ValueError('White balls must be between 1 and 69')
-        if not 1 <= v[5] <= 26:
-            raise ValueError('Powerball must be between 1 and 26')
+        for nums in v:
+            if len(nums) != 6:
+                raise ValueError('Each number set must have exactly 6 numbers (5 white balls + 1 powerball)')
+            if not all(1 <= x <= 69 for x in nums[:5]):
+                raise ValueError('White balls must be between 1 and 69')
+            if not 1 <= nums[5] <= 26:
+                raise ValueError('Powerball must be between 1 and 26')
         return v
 
 class PredictionRequest(BaseModel):
@@ -310,6 +311,182 @@ async def read_root():
         "version": "1.0.0"
     }
 
+@app.get("/api/user_stats")
+async def get_user_statistics(
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
+    db = get_db()
+    
+    # Get user ID from the current_user
+    user_id = 1
+    if current_user:
+        user_id = current_user.get("id", 1)
+    
+    stats = db.get_user_stats(user_id)
+    
+    return stats
+
+@app.get("/api/user_checks")
+async def get_user_checks(
+    limit: int = 10,
+    offset: int = 0,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
+    db = get_db()
+    
+    # Get user ID from the current_user
+    user_id = 1
+    if current_user:
+        user_id = current_user.get("id", 1)
+    
+    checks = db.get_user_checks(user_id, limit=limit, offset=offset)
+    
+    return {"success": True, "checks": checks, "total": len(checks)}
+
+@app.post("/api/db/reset")
+async def reset_database_schema():
+    """Reset the database schema"""
+    try:
+        db = get_db()
+        
+        # Connect to database
+        if not db.connect():
+            raise HTTPException(status_code=500, detail="Failed to connect to database")
+        
+        logger.info("Initializing database schema...")
+        
+        # Read the schema file
+        schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
+        
+        if not os.path.exists(schema_path):
+            raise HTTPException(status_code=500, detail=f"Schema file not found at {schema_path}")
+        
+        with open(schema_path, 'r') as f:
+            schema_sql = f.read()
+        
+        # Execute the schema SQL
+        with db.cursor() as cursor:
+            cursor.execute(schema_sql)
+        
+        # Initialize auth schema
+        init_auth_schema()
+        
+        logger.info("Database schema reset completed successfully")
+        
+        return {"success": True, "message": "Database schema reset completed successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error resetting database schema: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error resetting database schema: {str(e)}")
+
+@app.get("/api/debug/test")
+async def debug_test(request: Request):
+    """Debug endpoint to test if API calls are reaching the backend"""
+    logger.info("Debug test endpoint called")
+    
+    # Test database connection
+    db = get_db()
+    db_connected = db.connect()
+    
+    # Try to get a simple count of draws
+    draw_count = 0
+    if db_connected:
+        try:
+            draws = db.get_draws(limit=1)
+            draw_count = len(draws)
+        except Exception as e:
+            logger.error(f"Error getting draws in debug endpoint: {e}")
+    
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "database_connected": db_connected,
+        "draw_count": draw_count,
+        "message": "Debug endpoint working",
+        "headers": dict(request.headers),
+        "url": str(request.url)
+    }
+
+@app.get("/api/users")
+async def get_users():
+    """Get all users for admin purposes"""
+    return {
+        "success": True,
+        "users": [
+            {"id": 1, "username": "anonymous", "email": "anonymous@example.com"},
+            {"id": 2, "username": "admin", "email": "admin@example.com"}
+        ]
+    }
+
+# Background tasks
+async def run_analytics_tasks():
+    """Run all analytics tasks"""
+    try:
+        analytics = get_analytics()
+        logger.info("Running analytics tasks...")
+        
+        result = analytics.run_all_analyses()
+        
+        if result.get('success', False):
+            logger.info("Analytics tasks completed successfully")
+        else:
+            logger.error(f"Analytics tasks failed: {result.get('message', 'Unknown error')}")
+    
+    except Exception as e:
+        logger.error(f"Error in analytics tasks: {str(e)}")
+
+async def update_combinations_task():
+    """Update expected combinations"""
+    try:
+        analytics = get_analytics()
+        db = get_db()
+        
+        logger.info("Updating expected combinations...")
+        
+        db.clear_expected_combinations()
+        
+        predictions = analytics.generate_ml_prediction()
+        
+        if predictions and len(predictions) > 0:
+            prediction = predictions[0]
+            db.add_expected_combination(
+                white_balls=prediction["white_balls"],
+                powerball=prediction["powerball"],
+                score=prediction["confidence"],
+                method=prediction["method"],
+                reason=prediction.get("rationale", "")
+            )
+        
+        pattern_predictions = analytics.generate_pattern_prediction()
+        
+        if pattern_predictions and len(pattern_predictions) > 0:
+            freq_prediction = pattern_predictions[0]
+            db.add_expected_combination(
+                white_balls=freq_prediction["white_balls"],
+                powerball=freq_prediction["powerball"],
+                score=freq_prediction["confidence"],
+                method=freq_prediction["method"],
+                reason=freq_prediction.get("rationale", "")
+            )
+        
+        logger.info("Combinations updated successfully")
+    
+    except Exception as e:
+        logger.error(f"Error updating combinations: {str(e)}")
+
+# Run the application
+if __name__ == "__main__":
+    import uvicorn
+    
+    os.makedirs("data/logs", exist_ok=True)
+    
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=int(os.environ.get("PORT", 5001)),
+        log_level=os.environ.get("LOG_LEVEL", "info").lower()
+    )
+
 @app.get("/api/health")
 async def health_check():
     db = get_db()
@@ -362,7 +539,8 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
             "access_token": access_token,
             "token_type": "bearer",
             "user_id": user["id"],
-            "username": user["username"]
+            "username": user["username"],
+            "is_admin": user.get("is_admin", False)
         }
     
     except HTTPException:
@@ -542,12 +720,10 @@ async def add_draw(
     # Log the incoming request
     logger.info(f"Adding draw: {draw.dict()}")
     
-    # Get user ID by awaiting the current_user coroutine
+    # Get user ID from the current_user
     user_id = 1
     if current_user:
-        user = await current_user
-        if user:
-            user_id = user.get("id", 1)
+        user_id = current_user.get("id", 1)
     
     try:
         result = db.add_draw(
@@ -584,8 +760,6 @@ async def add_draw(
         raise HTTPException(status_code=400, detail=f"Error adding draw: {str(e)}")
 
 # Check numbers endpoint
-# Modified version of the check_numbers function in main.py
-
 @app.post("/api/check_numbers")
 async def check_numbers(
     check: NumberCheck,
@@ -593,9 +767,9 @@ async def check_numbers(
 ):
     db = get_db()
     
-    # Get user ID - fix the same issue here
+    # Get user ID from the current_user
     user_id = 1
-        # Remove the await since current_user is already the resolved object
+    if current_user:
         user_id = current_user.get("id", 1)
     
     # Find the draw
@@ -604,84 +778,115 @@ async def check_numbers(
     if not draw:
         raise HTTPException(status_code=404, detail="Draw not found")
     
-    # Rest of the function remains the same...
     # Check for missing columns
     if 'white_balls' not in draw or 'powerball' not in draw:
         logger.error("Database schema missing white_balls or powerball columns")
         raise HTTPException(status_code=500, detail="Database schema error: missing white_balls or powerball columns")
     
-    # Ensure white_balls and powerball
+    # Ensure white_balls and powerball are processed correctly
     if draw['white_balls'] is None:
         logger.warning(f"Missing white_balls for draw {check.draw_number}")
         if not DEBUG_NO_FALLBACK:
             draw['white_balls'] = [1, 2, 3, 4, 5]
+    elif isinstance(draw['white_balls'], str):
+        try:
+            draw['white_balls'] = [int(x) for x in draw['white_balls'].strip("{}").split(",")]
+        except Exception:
+            logger.error(f"Failed to parse white_balls for draw {check.draw_number}: {draw['white_balls']}")
+            if not DEBUG_NO_FALLBACK:
+                draw['white_balls'] = [1, 2, 3, 4, 5]
+            
     if draw['powerball'] is None:
         logger.warning(f"Missing powerball for draw {check.draw_number}")
         if not DEBUG_NO_FALLBACK:
             draw['powerball'] = 1
+    elif isinstance(draw['powerball'], str):
+        try:
+            draw['powerball'] = int(draw['powerball'])
+        except Exception:
+            logger.error(f"Failed to parse powerball for draw {check.draw_number}: {draw['powerball']}")
+            if not DEBUG_NO_FALLBACK:
+                draw['powerball'] = 1
     
-    # Check matches
-    white_balls_to_check = check.numbers[:5]
-    powerball_to_check = check.numbers[5]
+    # Process each number set
+    results = []
+    for numbers in check.numbers:
+        # Check matches
+        white_balls_to_check = numbers[:5]
+        powerball_to_check = numbers[5]
+        
+        white_matches = [n for n in white_balls_to_check if n in draw["white_balls"]]
+        powerball_match = powerball_to_check == draw["powerball"]
+        
+        # Determine prize
+        prize = "No Prize"
+        is_winner = False
+        prize_amount = 0
+        
+        if powerball_match and len(white_matches) == 5:
+            prize = "JACKPOT WINNER!"
+            is_winner = True
+            prize_amount = draw.get("jackpot_amount", 0)
+        elif len(white_matches) == 5:
+            prize = "$1,000,000"
+            is_winner = True
+            prize_amount = 1000000
+        elif len(white_matches) == 4 and powerball_match:
+            prize = "$50,000"
+            is_winner = True
+            prize_amount = 50000
+        elif len(white_matches) == 4 or (len(white_matches) == 3 and powerball_match):
+            prize = "$100"
+            is_winner = True
+            prize_amount = 100
+        elif len(white_matches) == 3 or (len(white_matches) == 2 and powerball_match):
+            prize = "$7"
+            is_winner = True
+            prize_amount = 7
+        elif len(white_matches) == 1 and powerball_match:
+            prize = "$4"
+            is_winner = True
+            prize_amount = 4
+        elif powerball_match:
+            prize = "$4"
+            is_winner = True
+            prize_amount = 4
+        
+        # Record the check
+        check_result = db.add_user_check(
+            user_id=user_id,
+            draw_id=draw["id"],
+            numbers=numbers,
+            white_matches=white_matches,
+            powerball_match=powerball_match,
+            is_winner=is_winner,
+            prize=prize,
+            prize_amount=prize_amount
+        )
+        
+        # Create response
+        result = {
+            "user_id": user_id,
+            "draw_number": draw["draw_number"],
+            "draw_date": draw["draw_date"],
+            "numbers": numbers,
+            "matches": {
+                "white_balls": white_matches,
+                "powerball": powerball_to_check if powerball_match else None,
+                "is_winner": is_winner
+            },
+            "message": f"Matched {len(white_matches)} white ball{'s' if len(white_matches) != 1 else ''}" +
+                    (f" and the Powerball" if powerball_match else "") +
+                    f" - {prize}",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        results.append(result)
     
-    white_matches = [n for n in white_balls_to_check if n in draw["white_balls"]]
-    powerball_match = powerball_to_check == draw["powerball"]
+    # Broadcast new check to WebSocket clients
+    await sio.emit('new_check', {"user_id": user_id})
     
-    # Determine prize
-    prize = "No Prize"
-    is_winner = False
-    
-    if powerball_match and len(white_matches) == 5:
-        prize = "JACKPOT WINNER!"
-        is_winner = True
-    elif len(white_matches) == 5:
-        prize = "$1,000,000"
-        is_winner = True
-    elif len(white_matches) == 4 and powerball_match:
-        prize = "$50,000"
-        is_winner = True
-    elif len(white_matches) == 4 or (len(white_matches) == 3 and powerball_match):
-        prize = "$100"
-        is_winner = True
-    elif len(white_matches) == 3 or (len(white_matches) == 2 and powerball_match):
-        prize = "$7"
-        is_winner = True
-    elif len(white_matches) == 1 and powerball_match:
-        prize = "$4"
-        is_winner = True
-    elif powerball_match:
-        prize = "$4"
-        is_winner = True
-    
-    # Record the check
-    check_result = db.add_user_check(
-        user_id=user_id,
-        draw_id=draw["id"],
-        numbers=check.numbers,
-        white_matches=white_matches,
-        powerball_match=powerball_match,
-        is_winner=is_winner,
-        prize=prize
-    )
-    
-    # Create response
-    result = {
-        "user_id": user_id,
-        "draw_number": draw["draw_number"],
-        "draw_date": draw["draw_date"],
-        "numbers": check.numbers,
-        "matches": {
-            "white_balls": white_matches,
-            "powerball": powerball_to_check if powerball_match else None,
-            "is_winner": is_winner
-        },
-        "message": f"Matched {len(white_matches)} white ball{'s' if len(white_matches) != 1 else ''}" +
-                  (f" and the Powerball" if powerball_match else "") +
-                  f" - {prize}",
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    return {"success": True, "result": result}
+    return {"success": True, "results": results}
 
 # Scraping endpoints
 @app.post("/api/scrape/latest")
@@ -747,273 +952,6 @@ async def scrape_latest(background_tasks: BackgroundTasks):
             
     except Exception as e:
         logger.error(f"Error scraping latest draw: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/scrape/historical")
-async def scrape_historical(
-    background_tasks: BackgroundTasks,
-    count: int = 20,
-    current_user: Dict[str, Any] = Depends(get_current_user)
-):
-    scraper = PowerballScraper()
-    db = get_db()
-    
-    try:
-        # Scrape historical draws
-        draws = await scraper.fetch_historical_draws(count=count)
-        
-        if not draws:
-            raise HTTPException(status_code=404, detail="No historical draws found")
-        
-        # Add draws to database
-        new_draws = []
-        for draw_data in draws:
-            # Log raw draw data
-            logger.debug(f"Raw historical draw data: {json.dumps(draw_data)}")
-            
-            # Validate draw data
-            if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
-                logger.error(f"Invalid draw_number: {draw_data['draw_number']}")
-                continue
-            if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
-                logger.error(f"Invalid draw_date: {draw_data['draw_date']}")
-                continue
-            if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
-                logger.error(f"Invalid white_balls: {draw_data['white_balls']}")
-                continue
-            if not all(isinstance(x, int) and 1 <= x <= 69 for x in draw_data['white_balls']):
-                logger.error(f"White balls out of range: {draw_data['white_balls']}")
-                continue
-            if len(set(draw_data['white_balls'])) != 5:
-                logger.error(f"Duplicate white balls: {draw_data['white_balls']}")
-                continue
-            if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
-                logger.error(f"Invalid powerball value: {draw_data['powerball']}")
-                continue
-            if not isinstance(draw_data.get('jackpot_amount', 0), (int, float)) or draw_data.get('jackpot_amount', 0) < 0:
-                logger.error(f"Invalid jackpot_amount: {draw_data.get('jackpot_amount')}")
-                continue
-            if not isinstance(draw_data.get('winners', 0), int) or draw_data.get('winners', 0) < 0:
-                logger.error(f"Invalid winners: {draw_data.get('winners')}")
-                continue
-            
-            existing = db.get_draw_by_number(draw_data['draw_number'])
-            if existing:
-                logger.info(f"Draw {draw_data['draw_number']} already exists, skipping")
-                continue
-                
-            new_draw = db.add_draw(
-                draw_number=draw_data['draw_number'],
-                draw_date=draw_data['draw_date'],
-                white_balls=draw_data['white_balls'],
-                powerball=draw_data['powerball'],
-                jackpot_amount=draw_data.get('jackpot_amount', 0),
-                winners=draw_data.get('winners', 0),
-                source=draw_data.get('source', 'api')
-            )
-            
-            if new_draw:
-                # Broadcast new draw to WebSocket clients
-                await sio.emit('new_draw', new_draw)
-                new_draws.append(new_draw)
-        
-        if new_draws:
-            background_tasks.add_task(run_analytics_tasks)
-        
-        return {"success": True, "draws": new_draws, "count": len(new_draws)}
-        
-    except Exception as e:
-        logger.error(f"Error scraping historical draws: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Predictions endpoints
-@app.post("/api/predictions")
-async def generate_prediction(
-    request: PredictionRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
-):
-    db = get_db()
-    analytics = get_analytics()
-    
-    user_id = 1
-        user = await current_user
-        if user:
-            user_id = user.get("id", 1)
-    
-    prediction = None
-    
-    if request.method.lower() == 'machine-learning':
-        prediction = analytics.generate_ml_prediction()
-    else:
-        prediction = analytics.generate_pattern_prediction()
-    
-    prediction["user_id"] = user_id
-    
-    db_prediction = db.add_prediction(
-        white_balls=prediction["white_balls"],
-        powerball=prediction["powerball"],
-        method=prediction["method"],
-        confidence=prediction["confidence"],
-        rationale=prediction["rationale"],
-        user_id=user_id
-    )
-    
-    db.save_analysis_result('prediction', prediction)
-    
-    return {"success": True, "prediction": prediction}
-
-# Modified version of the generate_prediction function in main.py
-
-@app.post("/api/predictions")
-async def generate_prediction(
-    request: PredictionRequest,
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
-):
-    db = get_db()
-    analytics = get_analytics()
-    
-    # The error is here - current_user is already the resolved user object, not a coroutine
-    # So we don't need to await it
-    user_id = 1
-        # Remove the await since current_user is already the resolved object
-        user_id = current_user.get("id", 1)
-    
-    prediction = None
-    
-    if request.method.lower() == 'machine-learning':
-        prediction = analytics.generate_ml_prediction()
-    else:
-        prediction = analytics.generate_pattern_prediction()
-    
-    prediction["user_id"] = user_id
-    
-    db_prediction = db.add_prediction(
-        white_balls=prediction["white_balls"],
-        powerball=prediction["powerball"],
-        method=prediction["method"],
-        confidence=prediction["confidence"],
-        rationale=prediction["rationale"],
-        user_id=user_id
-    )
-    
-    db.save_analysis_result('prediction', prediction)
-    
-    return {"success": True, "prediction": prediction}
-
-# Analysis and insights endpoints
-@app.get("/api/insights/frequency")
-async def get_frequency_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    db = get_db()
-    frequency = db.get_frequency_analysis()
-    
-    return frequency
-
-@app.get("/api/insights/due")
-async def get_due_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    analytics = get_analytics()
-    db = get_db()
-    
-    try:
-        results = db.get_analysis_results('due_numbers', limit=1)
-        
-        if results:
-            return results[0]['result_data']
-        
-        freq = db.get_frequency_analysis()
-        
-        white_freq = [(int(num), freq) for num, freq in freq['white_balls'].items()]
-        pb_freq = [(int(num), freq) for num, freq in freq['powerballs'].items()]
-        
-        white_freq.sort(key=lambda x: x[1])
-        pb_freq.sort(key=lambda x: x[1])
-        
-        due_white = white_freq[:10]
-        due_pb = pb_freq[:5]
-        
-        result = {
-            "white_balls": {str(num): freq for num, freq in due_white},
-            "powerballs": {str(num): freq for num, freq in due_pb}
-        }
-        
-        db.save_analysis_result('due_numbers', result)
-        
-        return result
-    
-    except Exception as e:
-        logger.error(f"Error getting due numbers: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/insights/hot")
-async def get_hot_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    analytics = get_analytics()
-    db = get_db()
-    
-    try:
-        results = db.get_analysis_results('hot_numbers', limit=1)
-        
-        if results:
-            return results[0]['result_data']
-        
-        freq = db.get_frequency_analysis()
-        
-        white_freq = [(int(num), freq) for num, freq in freq['white_balls'].items()]
-        pb_freq = [(int(num), freq) for num, freq in freq['powerballs'].items()]
-        
-        white_freq.sort(key=lambda x: x[1], reverse=True)
-        pb_freq.sort(key=lambda x: x[1], reverse=True)
-        
-        hot_white = white_freq[:10]
-        hot_pb = pb_freq[:5]
-        
-        result = {
-            "white_balls": {str(num): freq for num, freq in hot_white},
-            "powerballs": {str(num): freq for num, freq in hot_pb}
-        }
-        
-        db.save_analysis_result('hot_numbers', result)
-        
-        return result
-    
-    except Exception as e:
-        logger.error(f"Error getting hot numbers: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/insights/pairs")
-async def get_pair_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
-    db = get_db()
-    
-    try:
-        results = db.get_analysis_results('pair_analysis', limit=1)
-        
-        if results:
-            return results[0]['result_data']
-        
-        draws = db.get_draws(limit=1000)
-        if not draws:
-            return {"common_pairs": []}
-        
-        from collections import Counter
-        pairs_counter = Counter()
-        
-        for draw in draws:
-            white_balls = draw["white_balls"] if 'white_balls' in draw and draw['white_balls'] else []
-            for i in range(len(white_balls)):
-                for j in range(i + 1, len(white_balls)):
-                    pair = tuple(sorted([white_balls[i], white_balls[j]]))
-                    pairs_counter[pair] += 1
-        
-        common_pairs = pairs_counter.most_common(15)
-        
-        result = {
-            "common_pairs": [{"pair": list(pair), "count": count} for pair, count in common_pairs]
-        }
-        
-        db.save_analysis_result('pair_analysis', result)
-        
-        return result
-    
-    except Exception as e:
-        logger.error(f"Error in pair analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/ideas")
@@ -1142,176 +1080,236 @@ async def update_combinations(
         "message": "Combinations update scheduled"
     }
 
-@app.get("/api/user_stats")
-async def get_user_statistics(
+@app.post("/api/scrape/historical")
+async def scrape_historical(
+    background_tasks: BackgroundTasks,
+    count: int = 20,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    scraper = PowerballScraper()
+    db = get_db()
+    
+    try:
+        # Scrape historical draws
+        draws = await scraper.fetch_historical_draws(count=count)
+        
+        if not draws:
+            raise HTTPException(status_code=404, detail="No historical draws found")
+        
+        # Add draws to database
+        new_draws = []
+        for draw_data in draws:
+            # Log raw draw data
+            logger.debug(f"Raw historical draw data: {json.dumps(draw_data)}")
+            
+            # Validate draw data
+            if not isinstance(draw_data['draw_number'], int) or draw_data['draw_number'] <= 0:
+                logger.error(f"Invalid draw_number: {draw_data['draw_number']}")
+                continue
+            if not isinstance(draw_data['draw_date'], str) or not draw_data['draw_date']:
+                logger.error(f"Invalid draw_date: {draw_data['draw_date']}")
+                continue
+            if not isinstance(draw_data['white_balls'], list) or len(draw_data['white_balls']) != 5:
+                logger.error(f"Invalid white_balls: {draw_data['white_balls']}")
+                continue
+            if not all(isinstance(x, int) and 1 <= x <= 69 for x in draw_data['white_balls']):
+                logger.error(f"White balls out of range: {draw_data['white_balls']}")
+                continue
+            if len(set(draw_data['white_balls'])) != 5:
+                logger.error(f"Duplicate white balls: {draw_data['white_balls']}")
+                continue
+            if not isinstance(draw_data['powerball'], int) or not 1 <= draw_data['powerball'] <= 26:
+                logger.error(f"Invalid powerball value: {draw_data['powerball']}")
+                continue
+            if not isinstance(draw_data.get('jackpot_amount', 0), (int, float)) or draw_data.get('jackpot_amount', 0) < 0:
+                logger.error(f"Invalid jackpot_amount: {draw_data.get('jackpot_amount')}")
+                continue
+            if not isinstance(draw_data.get('winners', 0), int) or draw_data.get('winners', 0) < 0:
+                logger.error(f"Invalid winners: {draw_data.get('winners')}")
+                continue
+            
+            existing = db.get_draw_by_number(draw_data['draw_number'])
+            if existing:
+                logger.info(f"Draw {draw_data['draw_number']} already exists, skipping")
+                continue
+                
+            new_draw = db.add_draw(
+                draw_number=draw_data['draw_number'],
+                draw_date=draw_data['draw_date'],
+                white_balls=draw_data['white_balls'],
+                powerball=draw_data['powerball'],
+                jackpot_amount=draw_data.get('jackpot_amount', 0),
+                winners=draw_data.get('winners', 0),
+                source=draw_data.get('source', 'api')
+            )
+            
+            if new_draw:
+                # Broadcast new draw to WebSocket clients
+                await sio.emit('new_draw', new_draw)
+                new_draws.append(new_draw)
+        
+        if new_draws:
+            background_tasks.add_task(run_analytics_tasks)
+        
+        return {"success": True, "draws": new_draws, "count": len(new_draws)}
+        
+    except Exception as e:
+        logger.error(f"Error scraping historical draws: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Predictions endpoint
+@app.post("/api/predictions")
+async def generate_prediction(
+    request: PredictionRequest,
     current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
 ):
     db = get_db()
+    analytics = get_analytics()
     
+    # Get user ID from the current_user
     user_id = 1
-        user = await current_user
-        if user:
-            user_id = user.get("id", 1)
+    if current_user:
+        user_id = current_user.get("id", 1)
     
-    stats = db.get_user_stats(user_id)
+    prediction = None
     
-    return stats
-
-@app.get("/api/user_checks")
-async def get_user_checks(
-    limit: int = 10,
-    offset: int = 0,
-    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
-):
-    db = get_db()
+    if request.method.lower() == 'machine-learning':
+        predictions = analytics.generate_ml_prediction()
+        prediction = predictions[0] if predictions else None
+    else:
+        predictions = analytics.generate_pattern_prediction()
+        prediction = predictions[0] if predictions else None
     
-    user_id = 1
-        user = await current_user
-        if user:
-            user_id = user.get("id", 1)
+    if not prediction:
+        raise HTTPException(status_code=500, detail="Failed to generate prediction")
+        
+    prediction["user_id"] = user_id
     
-    checks = db.get_user_checks(user_id, limit=limit, offset=offset)
-    
-    return {"success": True, "checks": checks, "total": len(checks)}
-
-@app.post("/api/db/reset")
-async def reset_database_schema():
-    """Reset the database schema"""
-    try:
-        db = get_db()
-        
-        # Connect to database
-        if not db.connect():
-            raise HTTPException(status_code=500, detail="Failed to connect to database")
-        
-        logger.info("Initializing database schema...")
-        
-        # Read the schema file
-        schema_path = os.path.join(os.path.dirname(__file__), 'schema.sql')
-        
-        if not os.path.exists(schema_path):
-            raise HTTPException(status_code=500, detail=f"Schema file not found at {schema_path}")
-        
-        with open(schema_path, 'r') as f:
-            schema_sql = f.read()
-        
-        # Execute the schema SQL
-        with db.cursor() as cursor:
-            cursor.execute(schema_sql)
-        
-        # Initialize auth schema
-        init_auth_schema()
-        
-        logger.info("Database schema reset completed successfully")
-        
-        return {"success": True, "message": "Database schema reset completed successfully"}
-        
-    except Exception as e:
-        logger.error(f"Error resetting database schema: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error resetting database schema: {str(e)}")
-
-@app.get("/api/debug/test")
-async def debug_test():
-    """Debug endpoint to test if API calls are reaching the backend"""
-    logger.info("Debug test endpoint called")
-    
-    # Test database connection
-    db = get_db()
-    db_connected = db.connect()
-    
-    # Try to get a simple count of draws
-    draw_count = 0
-    if db_connected:
-        try:
-            draws = db.get_draws(limit=1)
-            draw_count = len(draws)
-        except Exception as e:
-            logger.error(f"Error getting draws in debug endpoint: {e}")
-    
-    return {
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "database_connected": db_connected,
-        "draw_count": draw_count,
-        "message": "Debug endpoint working",
-        "headers": dict(request.headers),
-        "url": str(request.url)
-    }
-
-@app.get("/api/users")
-async def get_users():
-    """Get all users for admin purposes"""
-    return {
-        "success": True,
-        "users": [
-            {"id": 1, "username": "anonymous", "email": "anonymous@example.com"},
-            {"id": 2, "username": "admin", "email": "admin@example.com"}
-        ]
-    }
-
-# Background tasks
-async def run_analytics_tasks():
-    """Run all analytics tasks"""
-    try:
-        analytics = get_analytics()
-        logger.info("Running analytics tasks...")
-        
-        result = analytics.run_all_analyses()
-        
-        if result.get('success', False):
-            logger.info("Analytics tasks completed successfully")
-        else:
-            logger.error(f"Analytics tasks failed: {result.get('message', 'Unknown error')}")
-    
-    except Exception as e:
-        logger.error(f"Error in analytics tasks: {str(e)}")
-
-async def update_combinations_task():
-    """Update expected combinations"""
-    try:
-        analytics = get_analytics()
-        db = get_db()
-        
-        logger.info("Updating expected combinations...")
-        
-        db.clear_expected_combinations()
-        
-        prediction = analytics.generate_ml_prediction()
-        
-        if prediction:
-            db.add_expected_combination(
-                white_balls=prediction["white_balls"],
-                powerball=prediction["powerball"],
-                score=prediction["confidence"],
-                method=prediction["method"],
-                reason=prediction["rationale"]
-            )
-        
-        freq_prediction = analytics.generate_pattern_prediction()
-        
-        if freq_prediction:
-            db.add_expected_combination(
-                white_balls=freq_prediction["white_balls"],
-                powerball=freq_prediction["powerball"],
-                score=freq_prediction["confidence"],
-                method=freq_prediction["method"],
-                reason=freq_prediction["rationale"]
-            )
-        
-        logger.info("Combinations updated successfully")
-    
-    except Exception as e:
-        logger.error(f"Error updating combinations: {str(e)}")
-
-# Run the application
-if __name__ == "__main__":
-    import uvicorn
-    
-    os.makedirs("data/logs", exist_ok=True)
-    
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=int(os.environ.get("PORT", 5001)),
-        log_level=os.environ.get("LOG_LEVEL", "info").lower()
+    db_prediction = db.add_prediction(
+        white_balls=prediction["white_balls"],
+        powerball=prediction["powerball"],
+        method=prediction["method"],
+        confidence=prediction["confidence"],
+        rationale=prediction.get("rationale", ""),
+        user_id=user_id
     )
+    
+    db.save_analysis_result('prediction', prediction)
+    
+    return {"success": True, "prediction": prediction}
+
+# Analysis and insights endpoints
+@app.get("/api/insights/frequency")
+async def get_frequency_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    db = get_db()
+    frequency = db.get_frequency_analysis()
+    
+    return frequency
+
+@app.get("/api/insights/due")
+async def get_due_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    analytics = get_analytics()
+    db = get_db()
+    
+    try:
+        results = db.get_analysis_results('due_numbers', limit=1)
+        
+        if results:
+            return results[0]['result_data']
+        
+        freq = db.get_frequency_analysis()
+        
+        white_freq = [(int(num), freq) for num, freq in freq['white_balls'].items()]
+        pb_freq = [(int(num), freq) for num, freq in freq['powerballs'].items()]
+        
+        white_freq.sort(key=lambda x: x[1])
+        pb_freq.sort(key=lambda x: x[1])
+        
+        due_white = white_freq[:10]
+        due_pb = pb_freq[:5]
+        
+        result = {
+            "white_balls": {str(num): freq for num, freq in due_white},
+            "powerballs": {str(num): freq for num, freq in due_pb}
+        }
+        
+        db.save_analysis_result('due_numbers', result)
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error getting due numbers: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/insights/hot")
+async def get_hot_numbers(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    analytics = get_analytics()
+    db = get_db()
+    
+    try:
+        results = db.get_analysis_results('hot_numbers', limit=1)
+        
+        if results:
+            return results[0]['result_data']
+        
+        freq = db.get_frequency_analysis()
+        
+        white_freq = [(int(num), freq) for num, freq in freq['white_balls'].items()]
+        pb_freq = [(int(num), freq) for num, freq in freq['powerballs'].items()]
+        
+        white_freq.sort(key=lambda x: x[1], reverse=True)
+        pb_freq.sort(key=lambda x: x[1], reverse=True)
+        
+        hot_white = white_freq[:10]
+        hot_pb = pb_freq[:5]
+        
+        result = {
+            "white_balls": {str(num): freq for num, freq in hot_white},
+            "powerballs": {str(num): freq for num, freq in hot_pb}
+        }
+        
+        db.save_analysis_result('hot_numbers', result)
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error getting hot numbers: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/insights/pairs")
+async def get_pair_analysis(current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)):
+    db = get_db()
+    
+    try:
+        results = db.get_analysis_results('pair_analysis', limit=1)
+        
+        if results:
+            return results[0]['result_data']
+        
+        draws = db.get_draws(limit=1000)
+        if not draws:
+            return {"common_pairs": []}
+        
+        from collections import Counter
+        pairs_counter = Counter()
+        
+        for draw in draws:
+            white_balls = draw["white_balls"] if 'white_balls' in draw and draw['white_balls'] else []
+            for i in range(len(white_balls)):
+                for j in range(i + 1, len(white_balls)):
+                    pair = tuple(sorted([white_balls[i], white_balls[j]]))
+                    pairs_counter[pair] += 1
+        
+        common_pairs = pairs_counter.most_common(15)
+        
+        result = {
+            "common_pairs": [{"pair": list(pair), "count": count} for pair, count in common_pairs]
+        }
+        
+        db.save_analysis_result('pair_analysis', result)
+        
+        return result
+    
+    except Exception as e:
+        logger.error(f"Error in pair analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

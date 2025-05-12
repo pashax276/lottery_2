@@ -25,9 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ .
 
-# Copy startup script
-COPY backend/start_db.sh .
-RUN chmod +x start_db.sh
+# Make scripts executable
+RUN chmod +x *.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -44,4 +43,4 @@ ENV PYTHONUNBUFFERED=1 \
 EXPOSE 5001
 
 # Start the application using the startup script
-CMD ["./start_db.sh"]
+CMD ["python", "main.py"]

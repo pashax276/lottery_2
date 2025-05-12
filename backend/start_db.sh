@@ -1,5 +1,5 @@
 #!/bin/bash
-# backend/start.sh
+# backend/start_db.sh
 
 echo "Starting Powerball Backend..."
 

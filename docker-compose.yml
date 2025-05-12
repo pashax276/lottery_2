@@ -5,13 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-      args:
-        - VITE_API_URL=http://backend:5001  # This sets the env var during build
     ports:
       - "80:80"
     environment:
       - NODE_ENV=production
-      - VITE_API_URL=http://backend:5001  # This sets the runtime env var
     depends_on:
       - backend
     networks:
@@ -27,9 +24,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://powerball:powerball@db:5432/powerball
-      - DEBUG_NO_FALLBACK=true
+      - DEBUG_NO_FALLBACK=false
       - PORT=5001
-      - LOG_LEVEL=debug  # Changed to debug for more logs
+      - LOG_LEVEL=debug
       - SECRET_KEY=powerball_secret_key_change_in_production
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=powerball_admin
@@ -49,6 +46,8 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 15s
+    command: ["python", "main.py"]
 
   db:
     image: postgres:14-alpine
@@ -64,9 +63,9 @@ services:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U powerball -d powerball"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
   pgadmin:
