@@ -595,6 +595,7 @@ async def check_numbers(
     
     # Get user ID - fix the same issue here
     user_id = 1
+    if current_user:
         # Remove the await since current_user is already the resolved object
         user_id = current_user.get("id", 1)
     
@@ -836,6 +837,7 @@ async def generate_prediction(
     analytics = get_analytics()
     
     user_id = 1
+    if current_user:
         user = await current_user
         if user:
             user_id = user.get("id", 1)
@@ -875,6 +877,7 @@ async def generate_prediction(
     # The error is here - current_user is already the resolved user object, not a coroutine
     # So we don't need to await it
     user_id = 1
+    if current_user:
         # Remove the await since current_user is already the resolved object
         user_id = current_user.get("id", 1)
     
@@ -1149,6 +1152,7 @@ async def get_user_statistics(
     db = get_db()
     
     user_id = 1
+    if current_user:
         user = await current_user
         if user:
             user_id = user.get("id", 1)
@@ -1166,6 +1170,7 @@ async def get_user_checks(
     db = get_db()
     
     user_id = 1
+    if current_user:
         user = await current_user
         if user:
             user_id = user.get("id", 1)
