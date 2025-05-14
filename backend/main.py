@@ -229,13 +229,12 @@ app = FastAPI(
     description="API for analyzing and predicting Powerball lottery results",
     version="1.0.0",
     lifespan=lifespan,
-    # Remove the root_path parameter
 )
 socket_app = ASGIApp(sio)
-app.mount("/socket.io", socket_app)
-app.mount("/figures", StaticFiles(directory="data/figures"), name="figures")
+app.mount("/api/socket.io", socket_app)
+app.mount("/api/figures", StaticFiles(directory="data/figures"), name="figures")
 
-# Also add this to the Request middleware to log auth headers
+# Add middleware to log requests and their details
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     start_time = time.time()
@@ -298,19 +297,10 @@ app.add_middleware(
 logger.info(f"CORS configured with origins: {cors_origins}")
 
 # OAuth2 scheme
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/token", auto_error=False)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
 # Check if debug mode is enabled to skip fallbacks
 DEBUG_NO_FALLBACK = os.environ.get("DEBUG_NO_FALLBACK", "false").lower() == "true"
-
-# Routes
-@app.get("/")
-async def read_root():
-    return {
-        "status": "ok", 
-        "message": "Powerball Analysis API",
-        "version": "1.0.0"
-    }
 
 @app.get("/api/health")
 async def health_check():
@@ -321,6 +311,15 @@ async def health_check():
         "status": "healthy" if db_connected else "degraded",
         "database": "connected" if db_connected else "disconnected",
         "timestamp": datetime.now().isoformat(),
+    }
+
+# Routes
+@app.get("/api")
+async def read_root():
+    return {
+        "status": "ok", 
+        "message": "Powerball Analysis API",
+        "version": "1.0.0"
     }
 
 @app.get("/api/user_stats")
@@ -766,7 +765,7 @@ async def check_numbers(
     if not draw:
         raise HTTPException(status_code=404, detail="Draw not found")
     
-# Check for missing columns
+    # Check for missing columns
     if 'white_balls' not in draw or 'powerball' not in draw:
         logger.error("Database schema missing white_balls or powerball columns")
         raise HTTPException(status_code=500, detail="Database schema error: missing white_balls or powerball columns")
@@ -1146,6 +1145,48 @@ async def scrape_historical(
         raise HTTPException(status_code=500, detail=str(e))
 
 # Predictions endpoint
+@app.get("/api/predictions")
+async def get_predictions(
+    limit: int = 10,
+    offset: int = 0,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user)
+):
+    db = get_db()
+    
+    try:
+        # Get user ID from the current_user
+        user_id = 1
+        if current_user:
+            user_id = current_user.get("id", 1)
+        
+        # Fetch predictions from the database
+        predictions = db.get_predictions(user_id=user_id, limit=limit, offset=offset)
+        
+        if not predictions:
+            logger.info(f"No predictions found for user_id={user_id}")
+            return {"success": True, "predictions": [], "count": 0}
+        
+        # Process predictions to ensure correct format
+        processed_predictions = [
+            {
+                "white_balls": pred["white_balls"],
+                "powerball": pred["powerball"],
+                "method": pred["method"],
+                "confidence": pred["confidence"],
+                "rationale": pred.get("rationale", ""),
+                "created_at": pred.get("created_at", datetime.now().isoformat()),
+                "user_id": pred["user_id"]
+            }
+            for pred in predictions
+        ]
+        
+        logger.info(f"Returning {len(processed_predictions)} predictions for user_id={user_id}")
+        return {"success": True, "predictions": processed_predictions, "count": len(processed_predictions)}
+    
+    except Exception as e:
+        logger.error(f"Error fetching predictions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching predictions: {str(e)}")
+
 @app.post("/api/predictions")
 async def generate_prediction(
     request: PredictionRequest,

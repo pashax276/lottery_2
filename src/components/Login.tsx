@@ -67,7 +67,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
 
       console.log('Attempting login...');
-      const loginUrl = `${API_URL}/api/auth/token`;
+      const loginUrl = '/api/auth/token';
       console.log('Login URL:', loginUrl);
 
       const formData = new URLSearchParams();
