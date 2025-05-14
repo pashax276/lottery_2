@@ -228,7 +228,8 @@ app = FastAPI(
     title="Powerball Analyzer API",
     description="API for analyzing and predicting Powerball lottery results",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Remove the root_path parameter
 )
 socket_app = ASGIApp(sio)
 app.mount("/socket.io", socket_app)
@@ -309,6 +310,17 @@ async def read_root():
         "status": "ok", 
         "message": "Powerball Analysis API",
         "version": "1.0.0"
+    }
+
+@app.get("/api/health")
+async def health_check():
+    db = get_db()
+    db_connected = db.connect()
+    
+    return {
+        "status": "healthy" if db_connected else "degraded",
+        "database": "connected" if db_connected else "disconnected",
+        "timestamp": datetime.now().isoformat(),
     }
 
 @app.get("/api/user_stats")
@@ -473,30 +485,6 @@ async def update_combinations_task():
     
     except Exception as e:
         logger.error(f"Error updating combinations: {str(e)}")
-
-# Run the application
-if __name__ == "__main__":
-    import uvicorn
-    
-    os.makedirs("data/logs", exist_ok=True)
-    
-    uvicorn.run(
-        app, 
-        host="0.0.0.0", 
-        port=int(os.environ.get("PORT", 5001)),
-        log_level=os.environ.get("LOG_LEVEL", "info").lower()
-    )
-
-@app.get("/api/health")
-async def health_check():
-    db = get_db()
-    db_connected = db.connect()
-    
-    return {
-        "status": "healthy" if db_connected else "degraded",
-        "database": "connected" if db_connected else "disconnected",
-        "timestamp": datetime.now().isoformat(),
-    }
 
 # Authentication routes
 @app.post("/api/auth/register", response_model=User)
@@ -778,7 +766,7 @@ async def check_numbers(
     if not draw:
         raise HTTPException(status_code=404, detail="Draw not found")
     
-    # Check for missing columns
+# Check for missing columns
     if 'white_balls' not in draw or 'powerball' not in draw:
         logger.error("Database schema missing white_balls or powerball columns")
         raise HTTPException(status_code=500, detail="Database schema error: missing white_balls or powerball columns")
@@ -1313,3 +1301,16 @@ async def get_pair_analysis(current_user: Optional[Dict[str, Any]] = Depends(get
     except Exception as e:
         logger.error(f"Error in pair analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Run the application
+if __name__ == "__main__":
+    import uvicorn
+    
+    os.makedirs("data/logs", exist_ok=True)
+    
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=int(os.environ.get("PORT", 5001)),
+        log_level=os.environ.get("LOG_LEVEL", "info").lower(),
+    )

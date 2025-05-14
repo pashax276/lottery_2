@@ -10,7 +10,8 @@ services:
     environment:
       - NODE_ENV=production
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - powerball-network
     restart: unless-stopped
@@ -43,10 +44,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/api/health"]
-      interval: 30s
+      interval: 10s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
     command: ["python", "main.py"]
 
   db:
